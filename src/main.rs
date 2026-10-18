@@ -7,7 +7,7 @@ mod tray;
 
 use config::Config;
 use eframe::egui;
-use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_in_ports, list_midi_out_ports};
+use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_out_ports};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -297,13 +297,6 @@ impl ReMidiCore {
             self.logger.info("  (none)");
         } else {
             for p in out_ports {
-                self.logger.info(format!(" - {}", p));
-            }
-        }
-        let in_ports = list_midi_in_ports();
-        if !in_ports.is_empty() {
-            self.logger.info("MIDI-in ports are:");
-            for p in in_ports {
                 self.logger.info(format!(" - {}", p));
             }
         }

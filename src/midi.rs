@@ -115,17 +115,6 @@ pub fn list_midi_out_ports() -> Vec<String> {
         .collect()
 }
 
-pub fn list_midi_in_ports() -> Vec<String> {
-    let Ok(midi_in) = MidiInput::new("ReMIDI-Scanner") else {
-        return Vec::new();
-    };
-    midi_in
-        .ports()
-        .iter()
-        .filter_map(|p| midi_in.port_name(p).ok())
-        .collect()
-}
-
 struct FilterRuntimeState {
     filter_id: String,
     virtual_port_name: String,
