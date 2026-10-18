@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct TrayMenuIds {
     pub toggle_window: MenuId,
     pub load_file: MenuId,
+    pub edit_config: MenuId,
     pub reload_config: MenuId,
     pub run_tests: MenuId,
     pub list_ports: MenuId,
@@ -92,6 +93,7 @@ pub fn build_tray(presets: &[PathBuf], verbose: bool, paused: bool) -> anyhow::R
         }
     }
 
+    let item_edit = MenuItem::new("Edit Current Config (edit)", true, None);
     let item_reload = MenuItem::new("Reload Current Config (update)", true, None);
     let item_tests = MenuItem::new("Run Test Sequence (test)", true, None);
     let item_list = MenuItem::new("List Available MIDI Ports (list)", true, None);
@@ -106,6 +108,7 @@ pub fn build_tray(presets: &[PathBuf], verbose: bool, paused: bool) -> anyhow::R
     if !presets.is_empty() {
         menu.append(&submenu_presets)?;
     }
+    menu.append(&item_edit)?;
     menu.append(&item_reload)?;
     menu.append(&item_tests)?;
     menu.append(&item_list)?;
@@ -125,6 +128,7 @@ pub fn build_tray(presets: &[PathBuf], verbose: bool, paused: bool) -> anyhow::R
     let ids = TrayMenuIds {
         toggle_window: item_window.id().clone(),
         load_file: item_load.id().clone(),
+        edit_config: item_edit.id().clone(),
         reload_config: item_reload.id().clone(),
         run_tests: item_tests.id().clone(),
         list_ports: item_list.id().clone(),

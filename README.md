@@ -102,6 +102,7 @@ remidi
 - **Show / Hide Log & Error Window:** Toggle the live log/error monitor window.
 - **Load .remidi Config...:** Open a file dialog to switch `.remidi` configurations.
 - **Quick Configs:** Submenu listing `.remidi` files discovered in the current or executable directory.
+- **Edit Current Config (`edit`):** Open the active `.remidi` file in `$VISUAL` / `$EDITOR` (or `notepad` on Windows / `vi` in a terminal on Linux), wait until the editor closes, and automatically reload the configuration.
 - **Reload Current Config (`update`):** Re-parse and reload the active `.remidi` file.
 - **Run Test Sequence (`test`):** Execute the `[[tests]]` steps defined in the active config.
 - **List Available MIDI Ports (`list`):** Print all detected system MIDI ports to the log window.

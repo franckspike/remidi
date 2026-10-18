@@ -11,7 +11,10 @@ use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_in_ports, list_midi_out
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::Duration;
 use tray::{TrayMenuIds, build_tray, generate_tray_icon};
 use tray_icon::TrayIcon;
@@ -41,6 +44,127 @@ fn discover_remidi_files(base_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+#[cfg(target_os = "linux")]
+fn is_tui_editor(bin: &str) -> bool {
+    let name = Path::new(bin)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(bin);
+    matches!(
+        name,
+        "vi" | "vim" | "nvim" | "nano" | "micro" | "helix" | "hx" | "emacs" | "kak" | "joe" | "ne"
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn find_linux_terminal() -> Option<&'static str> {
+    const TERMINALS: &[&str] = &[
+        "x-terminal-emulator",
+        "kitty",
+        "alacritty",
+        "wezterm",
+        "konsole",
+        "gnome-terminal",
+        "xfce4-terminal",
+        "xterm",
+    ];
+    for &term in TERMINALS {
+        if let Ok(status) = Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {} >/dev/null 2>&1", term))
+            .status()
+        {
+            if status.success() {
+                return Some(term);
+            }
+        }
+    }
+    None
+}
+
+fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<()> {
+    let editor = env::var("VISUAL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| {
+            #[cfg(target_os = "windows")]
+            {
+                "notepad".to_string()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                "vi".to_string()
+            }
+        });
+
+    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let bin = parts.first().copied().unwrap_or("vi");
+    let extra_args = &parts[1..];
+
+    #[cfg(target_os = "linux")]
+    if is_tui_editor(bin) {
+        if let Some(term) = find_linux_terminal() {
+            logger.info(format!(
+                "Opening '{}' with '{}' (in {})...",
+                path.display(),
+                editor,
+                term
+            ));
+            let mut cmd = Command::new(term);
+            match term {
+                "gnome-terminal" => {
+                    cmd.arg("--wait").arg("--").arg(bin);
+                }
+                "xfce4-terminal" => {
+                    cmd.arg("--disable-server").arg("-x").arg(bin);
+                }
+                "wezterm" => {
+                    cmd.arg("start").arg("--always-new-process").arg("--").arg(bin);
+                }
+                _ => {
+                    cmd.arg("-e").arg(bin);
+                }
+            }
+            for a in extra_args {
+                cmd.arg(a);
+            }
+            cmd.arg(path);
+            let status = cmd.status()?;
+            if !status.success() {
+                anyhow::bail!("Editor exited with status {}", status);
+            }
+            return Ok(());
+        }
+    }
+
+    logger.info(format!(
+        "Opening '{}' with '{}'...",
+        path.display(),
+        editor
+    ));
+    let mut cmd = Command::new(bin);
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    // Wait flags for common GUI editors if user did not pass --wait/-w
+    let bin_name = Path::new(bin)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(bin);
+    if matches!(bin_name, "code" | "code.cmd" | "codium" | "subl" | "zed")
+        && !extra_args.iter().any(|&a| a == "--wait" || a == "-w")
+    {
+        cmd.arg("--wait");
+    }
+    cmd.arg(path);
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Editor '{}' exited with status {}", editor, status);
+    }
+    Ok(())
+}
+
 struct ReMidiApp {
     logger: SharedLogger,
     engine: MidiEngine,
@@ -51,6 +175,8 @@ struct ReMidiApp {
     auto_scroll: bool,
     only_errors: bool,
     icon_has_error: bool,
+    reload_pending: Arc<AtomicBool>,
+    editing_in_progress: Arc<AtomicBool>,
 }
 
 impl ReMidiApp {
@@ -83,6 +209,8 @@ impl ReMidiApp {
             auto_scroll: true,
             only_errors: false,
             icon_has_error: false,
+            reload_pending: Arc::new(AtomicBool::new(false)),
+            editing_in_progress: Arc::new(AtomicBool::new(false)),
         };
 
         app.logger.info("----- ReMIDI -----");
@@ -127,6 +255,39 @@ impl ReMidiApp {
         } else {
             self.logger.error("No configuration file is currently selected.");
         }
+    }
+
+    fn edit_current_config(&mut self) {
+        let Some(path) = self.current_config_path.clone() else {
+            self.logger
+                .error("Cannot edit config: no .remidi file is currently selected.");
+            return;
+        };
+        if self.editing_in_progress.swap(true, Ordering::SeqCst) {
+            self.logger
+                .info("An editor session is already open for the current config.");
+            return;
+        }
+
+        let logger = self.logger.clone();
+        let reload_pending = self.reload_pending.clone();
+        let editing_in_progress = self.editing_in_progress.clone();
+
+        thread::spawn(move || {
+            match spawn_editor_and_wait(&path, &logger) {
+                Ok(()) => {
+                    logger.info(format!(
+                        "Finished editing '{}', triggering reload...",
+                        path.display()
+                    ));
+                    reload_pending.store(true, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    logger.error(format!("Error launching editor for '{}': {}", path.display(), e));
+                }
+            }
+            editing_in_progress.store(false, Ordering::SeqCst);
+        });
     }
 
     fn log_midi_ports(&self) {
@@ -182,6 +343,8 @@ impl ReMidiApp {
                 {
                     self.load_config_from_path(&file);
                 }
+            } else if event.id == ids.edit_config {
+                self.edit_current_config();
             } else if event.id == ids.reload_config {
                 self.reload_current_config();
             } else if event.id == ids.run_tests {
@@ -225,6 +388,10 @@ impl eframe::App for ReMidiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_tray_events(ctx);
 
+        if self.reload_pending.swap(false, Ordering::SeqCst) {
+            self.reload_current_config();
+        }
+
         // If the user clicks the window's X button, hide to tray instead of quitting
         if ctx.input(|i| i.viewport().close_requested()) && self.tray_icon.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -254,6 +421,21 @@ impl eframe::App for ReMidiApp {
                     {
                         self.load_config_from_path(&file);
                     }
+                }
+                let is_editing = self.editing_in_progress.load(Ordering::Relaxed);
+                let edit_label = if is_editing {
+                    "✏ Editing..."
+                } else {
+                    "✏ Edit (edit)"
+                };
+                if ui
+                    .add_enabled(
+                        !is_editing && self.current_config_path.is_some(),
+                        egui::Button::new(edit_label),
+                    )
+                    .clicked()
+                {
+                    self.edit_current_config();
                 }
                 if ui.button("🔄 Reload (update)").clicked() {
                     self.reload_current_config();
