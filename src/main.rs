@@ -165,7 +165,7 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
     Ok(())
 }
 
-struct ReMidiApp {
+struct ReMidiCore {
     logger: SharedLogger,
     engine: MidiEngine,
     current_config_path: Option<PathBuf>,
@@ -179,7 +179,7 @@ struct ReMidiApp {
     editing_in_progress: Arc<AtomicBool>,
 }
 
-impl ReMidiApp {
+impl ReMidiCore {
     fn new(
         logger: SharedLogger,
         engine: MidiEngine,
@@ -199,7 +199,7 @@ impl ReMidiApp {
             }
         };
 
-        let mut app = Self {
+        let mut core = Self {
             logger,
             engine,
             current_config_path: None,
@@ -213,20 +213,20 @@ impl ReMidiApp {
             editing_in_progress: Arc::new(AtomicBool::new(false)),
         };
 
-        app.logger.info("----- ReMIDI -----");
+        core.logger.info("----- ReMIDI -----");
         if let Some(path) = initial_config {
-            app.load_config_from_path(&path);
+            core.load_config_from_path(&path);
         } else {
-            app.logger
+            core.logger
                 .info("No .remidi file specified. Select one via Tray Menu or 'Load Config...'.");
         }
 
         // If no system tray is available on this desktop environment, keep the window visible
-        if app.tray_icon.is_none() {
-            app.window_visible = true;
+        if core.tray_icon.is_none() {
+            core.window_visible = true;
         }
 
-        app
+        core
     }
 
     fn load_config_from_path(&mut self, path: &Path) {
@@ -316,18 +316,21 @@ impl ReMidiApp {
         }
     }
 
-    fn set_window_visible(&mut self, ctx: &egui::Context, visible: bool) {
-        self.window_visible = visible;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
-        if visible {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
-    }
-
-    fn poll_tray_events(&mut self, ctx: &egui::Context) {
+    fn poll_events(&mut self) {
         #[cfg(target_os = "linux")]
         while gtk::events_pending() {
             gtk::main_iteration_do(false);
+        }
+
+        if self.reload_pending.swap(false, Ordering::SeqCst) {
+            self.reload_current_config();
+        }
+
+        // Automatically pop up the window if an error occurred!
+        if self.logger.take_unseen_error() {
+            self.icon_has_error = true;
+            self.update_tray_icon();
+            self.window_visible = true;
         }
 
         while let Ok(event) = MenuEvent::receiver().try_recv() {
@@ -335,7 +338,7 @@ impl ReMidiApp {
                 continue;
             };
             if event.id == ids.toggle_window {
-                self.set_window_visible(ctx, !self.window_visible);
+                self.window_visible = !self.window_visible;
             } else if event.id == ids.load_file {
                 if let Some(file) = rfd::FileDialog::new()
                     .add_filter("ReMIDI Config", &["remidi", "toml", "json"])
@@ -351,7 +354,7 @@ impl ReMidiApp {
                 self.engine.run_tests();
             } else if event.id == ids.list_ports {
                 self.log_midi_ports();
-                self.set_window_visible(ctx, true);
+                self.window_visible = true;
             } else if event.id == ids.toggle_verbose.id() {
                 let new_val = !self.logger.verbose.load(Ordering::Relaxed);
                 self.logger.verbose.store(new_val, Ordering::Relaxed);
@@ -384,33 +387,28 @@ impl ReMidiApp {
     }
 }
 
-impl eframe::App for ReMidiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_tray_events(ctx);
+struct WindowApp {
+    core: std::rc::Rc<std::cell::RefCell<ReMidiCore>>,
+}
 
-        if self.reload_pending.swap(false, Ordering::SeqCst) {
-            self.reload_current_config();
+impl WindowApp {
+    fn update_ui(&mut self, ctx: &egui::Context) {
+        let mut core = self.core.borrow_mut();
+        core.poll_events();
+
+        // If the user clicked X on the window or toggled visibility off via the tray menu,
+        // close the window cleanly and return to the background tray loop!
+        if ctx.input(|i| i.viewport().close_requested()) {
+            core.window_visible = false;
+            return;
+        }
+        if !core.window_visible {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
         }
 
-        // If the user clicks the window's X button, hide to tray instead of quitting
-        if ctx.input(|i| i.viewport().close_requested()) && self.tray_icon.is_some() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.set_window_visible(ctx, false);
-        }
-
-        // Automatically pop up the window if an error occurred!
-        if self.logger.take_unseen_error() {
-            self.icon_has_error = true;
-            self.update_tray_icon();
-            if !self.window_visible {
-                self.set_window_visible(ctx, true);
-            }
-        } else if self.window_visible && self.tray_icon.is_none() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        }
-
-        // Keep polling tray events and incoming MIDI logs periodically even when idle
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // Keep polling tray events and incoming MIDI logs periodically while window is open
+        ctx.request_repaint_after(Duration::from_millis(80));
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -419,10 +417,10 @@ impl eframe::App for ReMidiApp {
                         .add_filter("ReMIDI Config", &["remidi", "toml", "json"])
                         .pick_file()
                     {
-                        self.load_config_from_path(&file);
+                        core.load_config_from_path(&file);
                     }
                 }
-                let is_editing = self.editing_in_progress.load(Ordering::Relaxed);
+                let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
                 let edit_label = if is_editing {
                     "✏ Editing..."
                 } else {
@@ -430,58 +428,58 @@ impl eframe::App for ReMidiApp {
                 };
                 if ui
                     .add_enabled(
-                        !is_editing && self.current_config_path.is_some(),
+                        !is_editing && core.current_config_path.is_some(),
                         egui::Button::new(edit_label),
                     )
                     .clicked()
                 {
-                    self.edit_current_config();
+                    core.edit_current_config();
                 }
                 if ui.button("🔄 Reload (update)").clicked() {
-                    self.reload_current_config();
+                    core.reload_current_config();
                 }
                 if ui.button("▶ Run Tests (test)").clicked() {
-                    self.engine.run_tests();
+                    core.engine.run_tests();
                 }
                 if ui.button("🎹 List Ports (list)").clicked() {
-                    self.log_midi_ports();
+                    core.log_midi_ports();
                 }
 
                 ui.separator();
 
-                let mut verbose = self.logger.verbose.load(Ordering::Relaxed);
+                let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
                 if ui.checkbox(&mut verbose, "Verbose").changed() {
-                    self.logger.verbose.store(verbose, Ordering::Relaxed);
-                    if let Some(ids) = &self.tray_ids {
+                    core.logger.verbose.store(verbose, Ordering::Relaxed);
+                    if let Some(ids) = &core.tray_ids {
                         ids.toggle_verbose.set_checked(verbose);
                     }
-                    self.logger.info(if verbose {
+                    core.logger.info(if verbose {
                         "Verbose is ON"
                     } else {
                         "Verbose is OFF"
                     });
                 }
 
-                let mut paused = self.logger.paused.load(Ordering::Relaxed);
+                let mut paused = core.logger.paused.load(Ordering::Relaxed);
                 if ui.checkbox(&mut paused, "Paused").changed() {
-                    self.logger.paused.store(paused, Ordering::Relaxed);
-                    if let Some(ids) = &self.tray_ids {
+                    core.logger.paused.store(paused, Ordering::Relaxed);
+                    if let Some(ids) = &core.tray_ids {
                         ids.toggle_pause.set_checked(paused);
                     }
-                    self.update_tray_icon();
+                    core.update_tray_icon();
                 }
 
-                ui.checkbox(&mut self.only_errors, "Errors Only");
-                ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
+                ui.checkbox(&mut core.only_errors, "Errors Only");
+                ui.checkbox(&mut core.auto_scroll, "Auto-scroll");
 
                 if ui.button("🗑 Clear").clicked() {
-                    self.logger.clear();
-                    self.icon_has_error = false;
-                    self.update_tray_icon();
+                    core.logger.clear();
+                    core.icon_has_error = false;
+                    core.update_tray_icon();
                 }
             });
 
-            if let Some(path) = &self.current_config_path {
+            if let Some(path) = &core.current_config_path {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!("Active Config: {}", path.display()))
@@ -495,30 +493,33 @@ impl eframe::App for ReMidiApp {
         egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("Tip: Closing this window minimizes ReMIDI to the system tray. Window pops up automatically on errors.")
+                    egui::RichText::new("Tip: Closing this window hides ReMIDI to the system tray. Window pops up automatically on errors.")
                         .small()
                         .weak(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Quit ReMIDI").clicked() {
-                        self.engine.stop_all();
+                        core.engine.stop_all();
                         std::process::exit(0);
                     }
-                    if self.tray_icon.is_some() && ui.button("Hide to Tray").clicked() {
-                        self.set_window_visible(ctx, false);
+                    if core.tray_icon.is_some() && ui.button("Hide to Tray").clicked() {
+                        core.window_visible = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let entries = self.logger.snapshot();
+            let entries = core.logger.snapshot();
+            let only_errors = core.only_errors;
+            let auto_scroll = core.auto_scroll;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .stick_to_bottom(self.auto_scroll)
+                .stick_to_bottom(auto_scroll)
                 .show(ui, |ui| {
                     for entry in entries {
-                        if self.only_errors && entry.level != LogLevel::Error {
+                        if only_errors && entry.level != LogLevel::Error {
                             continue;
                         }
                         let color = match entry.level {
@@ -563,21 +564,50 @@ fn main() -> eframe::Result<()> {
 
     let logger = SharedLogger::new();
     let engine = MidiEngine::new(logger.clone());
+    let core = std::rc::Rc::new(std::cell::RefCell::new(ReMidiCore::new(
+        logger,
+        engine,
+        initial_config,
+        presets,
+    )));
 
-    let viewport = egui::ViewportBuilder::default()
-        .with_title("ReMIDI — Log & Error Monitor")
-        .with_inner_size([760.0, 440.0])
-        .with_min_inner_size([480.0, 260.0])
-        .with_visible(false);
+    loop {
+        let show_window = {
+            let mut c = core.borrow_mut();
+            c.poll_events();
+            c.window_visible
+        };
 
-    let options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
+        if show_window {
+            let viewport = egui::ViewportBuilder::default()
+                .with_title("ReMIDI — Log & Error Monitor")
+                .with_inner_size([760.0, 440.0])
+                .with_min_inner_size([480.0, 260.0]);
 
-    eframe::run_native(
-        "ReMIDI",
-        options,
-        Box::new(move |_cc| Ok(Box::new(ReMidiApp::new(logger, engine, initial_config, presets)))),
-    )
+            let options = eframe::NativeOptions {
+                viewport,
+                run_and_return: true,
+                ..Default::default()
+            };
+
+            let core_clone = core.clone();
+            let _ = eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {
+                let mut app = WindowApp {
+                    core: core_clone.clone(),
+                };
+                app.update_ui(ctx);
+            });
+
+            // If no tray icon exists on this system, closing the window should exit the app
+            let mut c = core.borrow_mut();
+            if c.tray_icon.is_none() {
+                c.engine.stop_all();
+                break;
+            }
+        } else {
+            thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    Ok(())
 }
