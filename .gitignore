@@ -1,0 +1,4 @@
+/target/
+/reference/
+*.pdb
+*.DS_Store

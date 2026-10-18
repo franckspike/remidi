@@ -1,0 +1,78 @@
+# =============================================================================
+# ReMIDI Configuration Example & Reference (Sample.remidi)
+# =============================================================================
+#
+# ReMIDI creates one or more virtual MIDI ports that other applications see as
+# MIDI Output ports, reads incoming MIDI messages, matches and transforms them
+# using regular expressions on uppercase hexadecimal byte strings, and forwards
+# matching messages to a real hardware/software MIDI Output port.
+#
+# MESSAGE FORMAT:
+#   Incoming MIDI messages are formatted as uppercase 2-digit hex bytes
+#   separated by a single space:
+#     2-byte message (e.g. Program Change): "C0 01"
+#     3-byte message (e.g. Note On / CC):   "90 3C 7F"
+#
+# UNMATCHED MESSAGES:
+#   Messages that do not match any rule in a filter are ignored (filtered out).
+#   If you want a pass-through fallback at the end of a filter's rules, add:
+#     match = "(.*)"
+#     replace = "$1"
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Filter 1: Program Change -> Note On (Scene Change) & Note On -> Tap Tempo CC
+# -----------------------------------------------------------------------------
+[[filters]]
+# Human-readable identifier for this filter (optional, defaults to "default")
+id = "program change to (note on) scene change"
+
+# Name of the virtual MIDI port created by ReMIDI (for receiving from DAW/apps)
+virtual_port = "ReMIDI"
+
+# Name (or substring) of the destination MIDI output port (for sending)
+target_port = "01. Ethernet MIDI"
+
+  # Rule 1: Convert Program Change on Channel 1 (C0 xx) to Note On (90 xx 7F)
+  [[filters.rules]]
+  match = 'C0 (\w\w)'
+  replace = "90 $1 7F"
+  min_delay_ms = 500        # Ignore repeat matches within 500 ms (debounce)
+  dec_second_byte = false   # Keep 2nd byte as-is
+  comment = "Program Change -> Note On | Scene Change"
+
+  # Rule 2: Convert Note On 0x01 (any velocity) to Control Change 80 (0x50)
+  [[filters.rules]]
+  match = '90 01 \w\w'
+  replace = "B0 50 00"
+  min_delay_ms = 0
+  comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
+
+# -----------------------------------------------------------------------------
+# Example Filter 2 (commented out): Channel Remap + 1-based to 0-based Program
+# -----------------------------------------------------------------------------
+# [[filters]]
+# id = "program change ch1 to ch2 (decrement program number)"
+# virtual_port = "ReMIDI Direct"
+# target_port = "01. Ethernet MIDI"
+#
+#   [[filters.rules]]
+#   match = 'C0 (\w\w)'
+#   replace = "C1 $1"
+#   min_delay_ms = 500
+#   dec_second_byte = true  # Decrements the 2nd MIDI byte by 1 (e.g. 01 -> 00)
+#   comment = "Program Change (ch1) -> Program Change (ch2) | G-Major"
+
+# -----------------------------------------------------------------------------
+# Built-in Test Sequence (triggered from Tray Menu -> "Run Test Sequence")
+# -----------------------------------------------------------------------------
+[[tests]]
+send = "C0 01"
+dec_second_byte = false
+
+[[tests]]
+sleep_ms = 1000
+
+[[tests]]
+send = "C0 04"
+dec_second_byte = false
