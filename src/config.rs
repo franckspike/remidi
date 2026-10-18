@@ -1,30 +1,37 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use toml_edit::{Document, value};
+
+pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default)]
-    pub filters: Vec<FilterConfig>,
-    #[serde(default)]
-    pub tests: Vec<TestStep>,
+    pub pipelines: Vec<PipelineConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterConfig {
-    #[serde(default = "default_filter_id")]
+pub struct PipelineConfig {
+    #[serde(default = "default_pipeline_id")]
     pub id: String,
-    #[serde(alias = "created_midi_out_port_name", default = "default_virtual_port")]
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_virtual_port")]
     pub virtual_port: String,
-    #[serde(alias = "opened_midi_out_port_name")]
     pub target_port: String,
     #[serde(default)]
     pub rules: Vec<RuleConfig>,
+    #[serde(default)]
+    pub test: Vec<String>,
 }
 
-fn default_filter_id() -> String {
-    "default".to_string()
+fn default_pipeline_id() -> String {
+    "Pipeline".to_string()
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn default_virtual_port() -> String {
@@ -35,9 +42,8 @@ fn default_virtual_port() -> String {
 pub struct RuleConfig {
     #[serde(rename = "match")]
     pub match_pattern: String,
-    #[serde(alias = "replace_by")]
     pub replace: String,
-    #[serde(alias = "min_delay", default)]
+    #[serde(default)]
     pub min_delay_ms: u64,
     #[serde(default)]
     pub dec_second_byte: bool,
@@ -45,77 +51,50 @@ pub struct RuleConfig {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestStep {
-    /// For TOML convenience: `send = "C0 01"`
-    #[serde(default)]
-    pub send: Option<String>,
-    /// For TOML convenience: `sleep_ms = 1000`
-    #[serde(default)]
-    pub sleep_ms: Option<u64>,
-    /// Legacy JSON support: `action = "send" | "sleep"`
-    #[serde(default)]
-    pub action: Option<String>,
-    /// Legacy JSON support: `message = "C0 01"`
-    #[serde(default)]
-    pub message: Option<String>,
-    /// Legacy JSON support: `duration = 1000`
-    #[serde(default)]
-    pub duration: Option<u64>,
-    #[serde(default)]
-    pub dec_second_byte: bool,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestAction {
+    Send(String),
+    Sleep(u64),
 }
 
-impl TestStep {
-    pub fn normalized(&self) -> Option<NormalizedTestStep> {
-        if let Some(msg) = &self.send {
-            return Some(NormalizedTestStep::Send {
-                message: msg.clone(),
-                dec_second_byte: self.dec_second_byte,
-            });
+impl PipelineConfig {
+    pub fn parse_test_steps(&self) -> Result<Vec<TestAction>> {
+        let mut actions = Vec::with_capacity(self.test.len());
+        for raw in &self.test {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("sleep") {
+                let ms_str = rest.trim();
+                let ms: u64 = ms_str
+                    .parse()
+                    .with_context(|| format!("Invalid sleep duration '{}' in test step '{}'", ms_str, raw))?;
+                actions.push(TestAction::Sleep(ms));
+            } else {
+                actions.push(TestAction::Send(trimmed.to_string()));
+            }
         }
-        if let Some(ms) = self.sleep_ms {
-            return Some(NormalizedTestStep::Sleep { duration_ms: ms });
-        }
-        match self.action.as_deref() {
-            Some("send") => self.message.as_ref().map(|m| NormalizedTestStep::Send {
-                message: m.clone(),
-                dec_second_byte: self.dec_second_byte,
-            }),
-            Some("sleep") => self
-                .duration
-                .map(|d| NormalizedTestStep::Sleep { duration_ms: d }),
-            _ => None,
-        }
+        Ok(actions)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NormalizedTestStep {
-    Send {
-        message: String,
-        dec_second_byte: bool,
-    },
-    Sleep {
-        duration_ms: u64,
-    },
+pub fn default_user_config_path() -> Result<PathBuf> {
+    let base = dirs::config_dir().context("Could not determine OS user configuration directory")?;
+    Ok(base.join("remidi").join("config.toml"))
 }
 
-/// Also allow a single top-level filter in TOML without `[[filters]]`
-#[derive(Debug, Clone, Deserialize)]
-struct SingleFilterToml {
-    #[serde(default = "default_filter_id")]
-    pub id: String,
-    #[serde(alias = "created_midi_out_port_name", default = "default_virtual_port")]
-    pub virtual_port: String,
-    #[serde(alias = "opened_midi_out_port_name")]
-    pub target_port: Option<String>,
-    #[serde(default)]
-    pub rules: Vec<RuleConfig>,
-    #[serde(default)]
-    pub filters: Vec<FilterConfig>,
-    #[serde(default)]
-    pub tests: Vec<TestStep>,
+pub fn ensure_user_config_exists(path: &Path) -> Result<()> {
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory '{}'", parent.display())
+            })?;
+        }
+        fs::write(path, DEFAULT_CONFIG_TEMPLATE)
+            .with_context(|| format!("Failed to create default config file '{}'", path.display()))?;
+    }
+    Ok(())
 }
 
 impl Config {
@@ -126,40 +105,54 @@ impl Config {
     }
 
     pub fn parse_str(content: &str, path: &Path) -> Result<Self> {
-        let trimmed = content.trim_start();
-        if trimmed.starts_with('{') {
-            let cfg: Config = serde_json::from_str(content)
-                .with_context(|| format!("Failed to parse JSON config '{}'", path.display()))?;
-            cfg.validate()?;
-            Ok(cfg)
-        } else {
-            let raw: SingleFilterToml = toml::from_str(content)
-                .with_context(|| format!("Failed to parse TOML config '{}'", path.display()))?;
-            let mut filters = raw.filters;
-            if let Some(target_port) = raw.target_port {
-                filters.insert(
-                    0,
-                    FilterConfig {
-                        id: raw.id,
-                        virtual_port: raw.virtual_port,
-                        target_port,
-                        rules: raw.rules,
-                    },
-                );
-            }
-            let cfg = Config {
-                filters,
-                tests: raw.tests,
-            };
-            cfg.validate()?;
-            Ok(cfg)
-        }
+        let cfg: Config = toml::from_str(content)
+            .with_context(|| format!("Failed to parse TOML config '{}'", path.display()))?;
+        cfg.validate()?;
+        Ok(cfg)
     }
 
     fn validate(&self) -> Result<()> {
-        if self.filters.is_empty() {
-            bail!("Configuration must define at least one filter (or top-level target_port + rules)");
+        if self.pipelines.is_empty() {
+            bail!("Configuration must define at least one [[pipelines]] section");
         }
+        for p in &self.pipelines {
+            let _ = p.parse_test_steps()?;
+        }
+        Ok(())
+    }
+
+    /// Updates `enabled` or `target_port` for a given pipeline index in the TOML file
+    /// while preserving all comments and formatting.
+    pub fn save_pipeline_update(
+        path: &Path,
+        pipeline_idx: usize,
+        new_enabled: Option<bool>,
+        new_target_port: Option<&str>,
+    ) -> Result<()> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read '{}' for saving", path.display()))?;
+        let mut doc = content
+            .parse::<Document>()
+            .with_context(|| format!("Failed to parse '{}' as TOML document", path.display()))?;
+
+        let pipelines = doc
+            .get_mut("pipelines")
+            .and_then(|item| item.as_array_of_tables_mut())
+            .context("Missing [[pipelines]] array of tables in config.toml")?;
+
+        let table = pipelines
+            .get_mut(pipeline_idx)
+            .with_context(|| format!("Pipeline index {} out of range", pipeline_idx))?;
+
+        if let Some(en) = new_enabled {
+            table["enabled"] = value(en);
+        }
+        if let Some(tp) = new_target_port {
+            table["target_port"] = value(tp);
+        }
+
+        fs::write(path, doc.to_string())
+            .with_context(|| format!("Failed to write updated config to '{}'", path.display()))?;
         Ok(())
     }
 }
@@ -167,37 +160,24 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
-    fn test_load_sample_toml_and_legacy_json() {
-        let sample_path = PathBuf::from("Sample.remidi");
-        let cfg = Config::load_from_file(&sample_path).expect("Failed to load Sample.remidi");
-        assert!(!cfg.filters.is_empty());
-        assert_eq!(cfg.filters[0].virtual_port, "ReMIDI");
-        assert!(!cfg.filters[0].target_port.is_empty());
-        assert!(!cfg.filters[0].rules.is_empty());
-
-        let legacy_json = r#"{
-            "filters": [{
-                "id": "direct",
-                "created_midi_out_port_name": "ReMIDI",
-                "opened_midi_out_port_name": "01. Ethernet MIDI",
-                "rules": [
-                    { "match": "C0 (\\w\\w)", "replace_by": "C1 $1", "min_delay": 500, "dec_second_byte": true }
-                ]
-            }],
-            "tests": [
-                { "action": "send", "message": "C0 01", "dec_second_byte": false },
-                { "action": "sleep", "duration": 1000 }
+    fn test_parse_default_template_and_test_steps() {
+        let cfg = Config::parse_str(DEFAULT_CONFIG_TEMPLATE, Path::new("config.example.toml"))
+            .expect("Failed to parse config.example.toml");
+        assert_eq!(cfg.pipelines.len(), 2);
+        assert_eq!(cfg.pipelines[0].id, "Scene Change & Tap Tempo");
+        assert!(cfg.pipelines[0].enabled);
+        assert_eq!(cfg.pipelines[0].virtual_port, "ReMIDI");
+        assert_eq!(
+            cfg.pipelines[0].parse_test_steps().unwrap(),
+            vec![
+                TestAction::Send("C0 01".to_string()),
+                TestAction::Sleep(1000),
+                TestAction::Send("C0 04".to_string()),
             ]
-        }"#;
-        let legacy_cfg = Config::parse_str(legacy_json, Path::new("legacy.remidi"))
-            .expect("Failed to parse legacy JSON .remidi");
-        assert_eq!(legacy_cfg.filters.len(), 1);
-        assert_eq!(legacy_cfg.filters[0].virtual_port, "ReMIDI");
-        assert_eq!(legacy_cfg.filters[0].target_port, "01. Ethernet MIDI");
-        assert!(legacy_cfg.filters[0].rules[0].dec_second_byte);
-        assert_eq!(legacy_cfg.filters[0].rules[0].min_delay_ms, 500);
+        );
+        assert!(!cfg.pipelines[1].enabled);
+        assert!(cfg.pipelines[1].rules[0].dec_second_byte);
     }
 }

@@ -1,0 +1,76 @@
+# =============================================================================
+# ReMIDI Configuration (config.toml)
+# =============================================================================
+#
+# Default location:
+#   - Linux:   ~/.config/remidi/config.toml
+#   - Windows: %APPDATA%\remidi\config.toml
+#
+# ReMIDI supports multiple independent MIDI pipelines in a single instance.
+# Each [[pipelines]] block creates its own `virtual_port` (visible to DAWs/apps
+# as a MIDI Output port), matches and transforms incoming MIDI messages using
+# regular expressions on uppercase hexadecimal byte strings, and forwards
+# matching messages to `target_port`.
+#
+# You can toggle each pipeline's `enabled` state, change its `target_port`
+# from the detected system MIDI-out ports, or run its `test` sequence directly
+# from the System Tray menu. Changes to `enabled` and `target_port` made in the
+# tray menu are automatically saved back to this file.
+#
+# MESSAGE FORMAT:
+#   Incoming MIDI messages are formatted as uppercase 2-digit hex bytes
+#   separated by a single space:
+#     2-byte message (e.g. Program Change): "C0 01"
+#     3-byte message (e.g. Note On / CC):   "90 3C 7F"
+#
+# UNMATCHED MESSAGES:
+#   Messages that do not match any rule in a pipeline are ignored (filtered out).
+#   If you want a pass-through fallback at the end of a pipeline's rules, add:
+#     match = "(.*)"
+#     replace = "$1"
+#
+# TEST SEQUENCE FORMAT:
+#   Each pipeline can define a `test` sequence as an array of strings:
+#     - "C0 01"      -> sends hex bytes "C0 01" into the pipeline
+#     - "sleep 1000" -> waits 1000 milliseconds before the next step
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Pipeline 1: Program Change -> Note On (Scene Change) & Note On -> Tap Tempo
+# -----------------------------------------------------------------------------
+[[pipelines]]
+id = "Scene Change & Tap Tempo"
+enabled = true
+virtual_port = "ReMIDI"
+target_port = "01. Ethernet MIDI"
+test = ["C0 01", "sleep 1000", "C0 04"]
+
+  [[pipelines.rules]]
+  match = 'C0 (\w\w)'
+  replace = "90 $1 7F"
+  min_delay_ms = 500
+  dec_second_byte = false
+  comment = "Program Change -> Note On | Scene Change"
+
+  [[pipelines.rules]]
+  match = '90 01 \w\w'
+  replace = "B0 50 00"
+  min_delay_ms = 0
+  comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
+
+# -----------------------------------------------------------------------------
+# Pipeline 2: Channel 1 -> Channel 2 Program Change (1-based to 0-based)
+# -----------------------------------------------------------------------------
+[[pipelines]]
+id = "G-Major Direct"
+enabled = false
+virtual_port = "ReMIDI Direct"
+target_port = "01. Ethernet MIDI"
+test = ["C0 01", "sleep 1000", "C0 04"]
+
+  [[pipelines.rules]]
+  match = 'C0 (\w\w)'
+  replace = "C1 $1"
+  min_delay_ms = 500
+  dec_second_byte = true
+  comment = "Program Change (ch1) -> Program Change (ch2) | G-Major"

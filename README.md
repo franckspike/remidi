@@ -1,69 +1,66 @@
 # ReMIDI
 
-**ReMIDI** is a lightweight, cross-platform (**Windows** & **Linux**) system tray utility that remedies MIDI compatibility quirks by capturing, filtering, and transforming MIDI messages in real time.
+**ReMIDI** is a lightweight, cross-platform (**Windows** & **Linux**) system tray utility that remedies MIDI compatibility quirks by capturing, filtering, and transforming MIDI messages in real time across multiple pipelines.
 
-It creates a **virtual MIDI port** (visible to DAWs and other applications as a MIDI Output port), matches incoming messages against regular expressions on uppercase hexadecimal byte strings, applies transformations and optional debouncing, and forwards the resulting bytes to a real **MIDI Output port**.
+Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applications as a MIDI Output port), matches incoming messages against regular expressions on uppercase hexadecimal byte strings, applies transformations and optional debouncing, and forwards the resulting bytes to a real **MIDI Output port**.
 
 ---
 
 ## Features
 
+- **Single User Configuration (`config.toml`):**
+  - Stored automatically in your OS user configuration folder:
+    - **Linux:** `~/.config/remidi/config.toml`
+    - **Windows:** `%APPDATA%\remidi\config.toml`
+  - Auto-created from the built-in template ([`config.example.toml`](config.example.toml)) on first run.
+- **Multiple MIDI Pipelines in One Instance:**
+  - Define as many `[[pipelines]]` as you need in `config.toml`.
+  - Enable/disable individual pipelines, switch their output `target_port` from a live list of connected MIDI-out ports, or run their `test` sequence directly from the System Tray menu.
+  - Changes to `enabled` or `target_port` made from the tray menu are automatically saved back to `config.toml` while preserving all comments and formatting.
 - **Cross-Platform Virtual MIDI Loopback:**
   - **Linux:** Creates native ALSA/JACK virtual MIDI ports out of the box (no external drivers required).
-  - **Windows:** Dynamically uses `teVirtualMIDI64.dll` (`teVirtualMIDISDK`, same driver used by `loopMIDI` and `rtpMIDI`) to create on-the-fly virtual MIDI ports, or falls back to opening an existing loopback port.
+  - **Windows:** Dynamically uses `teVirtualMIDI64.dll` (`teVirtualMIDISDK`, same driver used by `loopMIDI` and `rtpMIDI`) to create on-the-fly virtual MIDI ports.
 - **Regex Hex Matching & Replacement:**
   - Incoming MIDI bytes are formatted as uppercase hex (`"C0 01"`, `"90 3C 7F"`).
   - Match patterns use standard regular expressions with capture groups (`$1`, `$2`, etc.).
 - **Debouncing & Byte Adjustments:**
   - `min_delay_ms`: Filters out rapid duplicate/repeat triggers within the specified millisecond window.
   - `dec_second_byte`: Optionally decrements the second MIDI byte by 1 (e.g., converting 1-based Program Changes `01..80` to 0-based `00..7F`).
-- **Built-in Test Sequence Runner:**
-  - Define test `send` and `sleep_ms` steps right inside your `.remidi` config file and trigger them from the system tray menu or log window.
 - **System Tray + Popup Log & Error Monitor:**
   - Runs quietly in the system tray with a 5-pin DIN MIDI icon (Green = active, Amber = paused, Red = error).
   - Automatically pops up the **Log & Error Monitor** window if an error occurs (such as a missing MIDI port or invalid rule).
-  - Supports **TOML** `.remidi` files (recommended) as well as legacy JSON `.remidi` files.
 
 ---
 
-## Configuration Format (`.remidi`)
+## Configuration Format (`config.toml`)
 
-See [`Sample.remidi`](Sample.remidi) for a fully commented example configuration:
+See [`config.example.toml`](config.example.toml) for a fully commented example configuration:
 
 ```toml
-[[filters]]
-id = "program change to (note on) scene change"
+[[pipelines]]
+id = "Scene Change & Tap Tempo"
+enabled = true
 virtual_port = "ReMIDI"
 target_port = "01. Ethernet MIDI"
+test = ["C0 01", "sleep 1000", "C0 04"]
 
-  [[filters.rules]]
+  [[pipelines.rules]]
   match = 'C0 (\w\w)'
   replace = "90 $1 7F"
   min_delay_ms = 500
   dec_second_byte = false
   comment = "Program Change -> Note On | Scene Change"
 
-  [[filters.rules]]
+  [[pipelines.rules]]
   match = '90 01 \w\w'
   replace = "B0 50 00"
   min_delay_ms = 0
   comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
-
-[[tests]]
-send = "C0 01"
-
-[[tests]]
-sleep_ms = 1000
-
-[[tests]]
-send = "C0 04"
 ```
 
 ---
 
 ## Building & Installing (Windows & Linux)
-
-In Rust, **`cargo`** handles configuration, compilation, testing, and installation identically on both Windows and Linux:
 
 ### Prerequisites
 - **Rust toolchain:** [rustup.rs](https://rustup.rs/)
@@ -88,24 +85,15 @@ cargo uninstall remidi
 
 ---
 
-## Usage
+## System Tray Menu Actions
 
-```sh
-# Launch with a specific .remidi configuration file:
-remidi path/to/profile.remidi
-
-# Or launch with default discovery (loads ./Sample.remidi if present):
-remidi
-```
-
-### System Tray Menu Actions
 - **Show / Hide Log & Error Window:** Toggle the live log/error monitor window.
-- **Load .remidi Config...:** Open a file dialog to switch `.remidi` configurations.
-- **Quick Configs:** Submenu listing `.remidi` files discovered in the current or executable directory.
-- **Edit Current Config (`edit`):** Open the active `.remidi` file in `$VISUAL` / `$EDITOR` (or `notepad` on Windows / `vi` in a terminal on Linux), wait until the editor closes, and automatically reload the configuration.
-- **Reload Current Config (`update`):** Re-parse and reload the active `.remidi` file.
-- **Run Test Sequence (`test`):** Execute the `[[tests]]` steps defined in the active config.
-- **List Available MIDI Ports (`list`):** Print all detected system MIDI ports to the log window.
+- **Per-Pipeline Submenus (`<id> (<virtual_port>)`):**
+  - **Enabled:** Enable or disable the pipeline (saved to `config.toml`).
+  - **Run Test:** Execute the pipeline's `test = [...]` sequence.
+  - **MIDI-Out Port List:** Select the destination `target_port` from all currently detected MIDI-out ports (saved to `config.toml`).
+- **Edit Config (`edit`):** Open `config.toml` in `$VISUAL` / `$EDITOR` (or `notepad` on Windows / `vi` in a terminal on Linux), wait until the editor closes, and automatically reload.
+- **Reload Config (`update`):** Re-parse and reload `config.toml`.
 - **Verbose Logging (`verbose`):** Log unmatched and delay-filtered MIDI messages in addition to matched transformations.
-- **Pause MIDI Processing:** Temporarily bypass/mute MIDI processing without closing the virtual port.
+- **Pause All Pipelines:** Temporarily mute MIDI processing across all pipelines without closing virtual ports.
 - **Quit ReMIDI:** Close virtual/hardware MIDI ports and exit.

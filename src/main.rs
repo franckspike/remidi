@@ -5,44 +5,19 @@ mod engine;
 mod midi;
 mod tray;
 
-use config::Config;
+use config::{Config, default_user_config_path, ensure_user_config_exists};
 use eframe::egui;
 use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_out_ports};
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
-use tray::{TrayMenuIds, build_tray, generate_tray_icon};
+use std::time::{Duration, Instant};
+use tray::{TrayMenuIds, build_tray, build_tray_menu, generate_tray_icon};
 use tray_icon::TrayIcon;
 use tray_icon::menu::MenuEvent;
-
-fn discover_remidi_files(base_dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let mut search_dirs = vec![base_dir.to_path_buf(), base_dir.join("reference")];
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            search_dirs.push(exe_dir.to_path_buf());
-        }
-    }
-    for dir in search_dirs {
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("remidi") {
-                    if !files.contains(&path) {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
-    files.sort();
-    files
-}
 
 #[cfg(target_os = "linux")]
 fn is_tui_editor(bin: &str) -> bool {
@@ -138,16 +113,11 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
         }
     }
 
-    logger.info(format!(
-        "Opening '{}' with '{}'...",
-        path.display(),
-        editor
-    ));
+    logger.info(format!("Opening '{}' with '{}'...", path.display(), editor));
     let mut cmd = Command::new(bin);
     for a in extra_args {
         cmd.arg(a);
     }
-    // Wait flags for common GUI editors if user did not pass --wait/-w
     let bin_name = Path::new(bin)
         .file_name()
         .and_then(|s| s.to_str())
@@ -168,9 +138,11 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
 struct ReMidiCore {
     logger: SharedLogger,
     engine: MidiEngine,
-    current_config_path: Option<PathBuf>,
+    config_path: PathBuf,
     tray_icon: Option<TrayIcon>,
     tray_ids: Option<TrayMenuIds>,
+    cached_midi_ports: Vec<String>,
+    last_port_check: Instant,
     window_visible: bool,
     auto_scroll: bool,
     only_errors: bool,
@@ -180,18 +152,14 @@ struct ReMidiCore {
 }
 
 impl ReMidiCore {
-    fn new(
-        logger: SharedLogger,
-        engine: MidiEngine,
-        initial_config: Option<PathBuf>,
-        presets: Vec<PathBuf>,
-    ) -> Self {
+    fn new(logger: SharedLogger, engine: MidiEngine, config_path: PathBuf) -> Self {
         #[cfg(target_os = "linux")]
         {
             let _ = gtk::init();
         }
 
-        let (tray_icon, tray_ids) = match build_tray(&presets, false, false) {
+        let cached_midi_ports = list_midi_out_ports();
+        let (tray_icon, tray_ids) = match build_tray(&[], &cached_midi_ports, false, false) {
             Ok((t, ids)) => (Some(t), Some(ids)),
             Err(e) => {
                 logger.error(format!("Warning: Could not initialize system tray icon: {}", e));
@@ -202,9 +170,11 @@ impl ReMidiCore {
         let mut core = Self {
             logger,
             engine,
-            current_config_path: None,
+            config_path,
             tray_icon,
             tray_ids,
+            cached_midi_ports,
+            last_port_check: Instant::now(),
             window_visible: false,
             auto_scroll: true,
             only_errors: false,
@@ -214,12 +184,10 @@ impl ReMidiCore {
         };
 
         core.logger.info("----- ReMIDI -----");
-        if let Some(path) = initial_config {
-            core.load_config_from_path(&path);
-        } else {
-            core.logger
-                .info("No .remidi file specified. Select one via Tray Menu or 'Load Config...'.");
+        if let Err(e) = ensure_user_config_exists(&core.config_path) {
+            core.logger.error(format!("{:#}", e));
         }
+        core.reload_config();
 
         // If no system tray is available on this desktop environment, keep the window visible
         if core.tray_icon.is_none() {
@@ -229,11 +197,30 @@ impl ReMidiCore {
         core
     }
 
-    fn load_config_from_path(&mut self, path: &Path) {
+    fn rebuild_tray_menu(&mut self) {
+        let Some(tray) = &mut self.tray_icon else {
+            return;
+        };
+        let pipelines = self
+            .engine
+            .current_config()
+            .map(|c| c.pipelines.as_slice())
+            .unwrap_or(&[]);
+        let verbose = self.logger.verbose.load(Ordering::Relaxed);
+        let paused = self.logger.paused.load(Ordering::Relaxed);
+        self.cached_midi_ports = list_midi_out_ports();
+        if let Ok((menu, ids)) =
+            build_tray_menu(pipelines, &self.cached_midi_ports, verbose, paused)
+        {
+            tray.set_menu(Some(Box::new(menu)));
+            self.tray_ids = Some(ids);
+        }
+    }
+
+    fn reload_config(&mut self) {
         self.logger
-            .info(format!("Loading config '{}'...", path.display()));
-        self.current_config_path = Some(path.to_path_buf());
-        match Config::load_from_file(path) {
+            .info(format!("Loading config '{}'...", self.config_path.display()));
+        match Config::load_from_file(&self.config_path) {
             Ok(cfg) => {
                 if let Err(e) = self.engine.load_config(cfg) {
                     self.logger.error(format!("{:#}", e));
@@ -246,29 +233,17 @@ impl ReMidiCore {
                 self.logger.error(format!("{:#}", e));
             }
         }
-    }
-
-    fn reload_current_config(&mut self) {
-        self.logger.info("reloading config...");
-        if let Some(path) = self.current_config_path.clone() {
-            self.load_config_from_path(&path);
-        } else {
-            self.logger.error("No configuration file is currently selected.");
-        }
+        self.rebuild_tray_menu();
     }
 
     fn edit_current_config(&mut self) {
-        let Some(path) = self.current_config_path.clone() else {
-            self.logger
-                .error("Cannot edit config: no .remidi file is currently selected.");
-            return;
-        };
         if self.editing_in_progress.swap(true, Ordering::SeqCst) {
             self.logger
-                .info("An editor session is already open for the current config.");
+                .info("An editor session is already open for config.toml.");
             return;
         }
 
+        let path = self.config_path.clone();
         let logger = self.logger.clone();
         let reload_pending = self.reload_pending.clone();
         let editing_in_progress = self.editing_in_progress.clone();
@@ -277,29 +252,53 @@ impl ReMidiCore {
             match spawn_editor_and_wait(&path, &logger) {
                 Ok(()) => {
                     logger.info(format!(
-                        "Finished editing '{}', triggering reload...",
+                        "Finished editing '{}', reloading...",
                         path.display()
                     ));
                     reload_pending.store(true, Ordering::SeqCst);
                 }
                 Err(e) => {
-                    logger.error(format!("Error launching editor for '{}': {}", path.display(), e));
+                    logger.error(format!(
+                        "Error launching editor for '{}': {}",
+                        path.display(),
+                        e
+                    ));
                 }
             }
             editing_in_progress.store(false, Ordering::SeqCst);
         });
     }
 
-    fn log_midi_ports(&self) {
-        let out_ports = list_midi_out_ports();
-        self.logger.info("MIDI-out ports are:");
-        if out_ports.is_empty() {
-            self.logger.info("  (none)");
-        } else {
-            for p in out_ports {
-                self.logger.info(format!(" - {}", p));
-            }
+    fn toggle_pipeline_enabled(&mut self, pipeline_idx: usize) {
+        let Some(cfg) = self.engine.current_config() else {
+            return;
+        };
+        let Some(p) = cfg.pipelines.get(pipeline_idx) else {
+            return;
+        };
+        let new_enabled = !p.enabled;
+        if let Err(e) =
+            Config::save_pipeline_update(&self.config_path, pipeline_idx, Some(new_enabled), None)
+        {
+            self.logger
+                .error(format!("Failed to save pipeline state: {:#}", e));
         }
+        self.reload_config();
+    }
+
+    fn select_pipeline_target_port(&mut self, pipeline_idx: usize, port_name: String) {
+        if let Err(e) = Config::save_pipeline_update(
+            &self.config_path,
+            pipeline_idx,
+            None,
+            Some(&port_name),
+        ) {
+            self.logger
+                .error(format!("Failed to save target_port to config.toml: {:#}", e));
+        }
+        self.engine
+            .set_pipeline_target_port(pipeline_idx, port_name);
+        self.rebuild_tray_menu();
     }
 
     fn update_tray_icon(&mut self) {
@@ -316,7 +315,16 @@ impl ReMidiCore {
         }
 
         if self.reload_pending.swap(false, Ordering::SeqCst) {
-            self.reload_current_config();
+            self.reload_config();
+        }
+
+        // Periodically check if connected MIDI-out ports changed so tray menu stays up to date
+        if self.last_port_check.elapsed() >= Duration::from_secs(3) {
+            self.last_port_check = Instant::now();
+            let current_ports = list_midi_out_ports();
+            if current_ports != self.cached_midi_ports {
+                self.rebuild_tray_menu();
+            }
         }
 
         // Automatically pop up the window if an error occurred!
@@ -332,22 +340,11 @@ impl ReMidiCore {
             };
             if event.id == ids.toggle_window {
                 self.window_visible = !self.window_visible;
-            } else if event.id == ids.load_file {
-                if let Some(file) = rfd::FileDialog::new()
-                    .add_filter("ReMIDI Config", &["remidi", "toml", "json"])
-                    .pick_file()
-                {
-                    self.load_config_from_path(&file);
-                }
             } else if event.id == ids.edit_config {
                 self.edit_current_config();
             } else if event.id == ids.reload_config {
-                self.reload_current_config();
-            } else if event.id == ids.run_tests {
-                self.engine.run_tests();
-            } else if event.id == ids.list_ports {
-                self.log_midi_ports();
-                self.window_visible = true;
+                self.logger.info("reloading config...");
+                self.reload_config();
             } else if event.id == ids.toggle_verbose.id() {
                 let new_val = !self.logger.verbose.load(Ordering::Relaxed);
                 self.logger.verbose.store(new_val, Ordering::Relaxed);
@@ -370,11 +367,39 @@ impl ReMidiCore {
             } else if event.id == ids.quit {
                 self.engine.stop_all();
                 std::process::exit(0);
-            } else if let Some((_, preset_path)) =
-                ids.preset_files.iter().find(|(id, _)| *id == event.id)
-            {
-                let path_clone = preset_path.clone();
-                self.load_config_from_path(&path_clone);
+            } else {
+                // Check per-pipeline menu items
+                let mut toggle_idx = None;
+                let mut test_idx = None;
+                let mut port_change = None;
+
+                for p_entry in &ids.pipelines {
+                    if event.id == p_entry.toggle_enabled.id() {
+                        toggle_idx = Some(p_entry.pipeline_index);
+                        break;
+                    }
+                    if event.id == p_entry.run_test {
+                        test_idx = Some(p_entry.pipeline_index);
+                        break;
+                    }
+                    for (check_item, port_name) in &p_entry.port_items {
+                        if event.id == check_item.id() {
+                            port_change = Some((p_entry.pipeline_index, port_name.clone()));
+                            break;
+                        }
+                    }
+                    if port_change.is_some() {
+                        break;
+                    }
+                }
+
+                if let Some(idx) = toggle_idx {
+                    self.toggle_pipeline_enabled(idx);
+                } else if let Some(idx) = test_idx {
+                    self.engine.run_pipeline_test(idx);
+                } else if let Some((idx, port_name)) = port_change {
+                    self.select_pipeline_target_port(idx, port_name);
+                }
             }
         }
     }
@@ -389,8 +414,6 @@ impl WindowApp {
         let mut core = self.core.borrow_mut();
         core.poll_events();
 
-        // If the user clicked X on the window or toggled visibility off via the tray menu,
-        // close the window cleanly and return to the background tray loop!
         if ctx.input(|i| i.viewport().close_requested()) {
             core.window_visible = false;
             return;
@@ -400,42 +423,25 @@ impl WindowApp {
             return;
         }
 
-        // Keep polling tray events and incoming MIDI logs periodically while window is open
         ctx.request_repaint_after(Duration::from_millis(80));
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("📂 Load Config...").clicked() {
-                    if let Some(file) = rfd::FileDialog::new()
-                        .add_filter("ReMIDI Config", &["remidi", "toml", "json"])
-                        .pick_file()
-                    {
-                        core.load_config_from_path(&file);
-                    }
-                }
                 let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
                 let edit_label = if is_editing {
                     "✏ Editing..."
                 } else {
-                    "✏ Edit (edit)"
+                    "✏ Edit Config (edit)"
                 };
                 if ui
-                    .add_enabled(
-                        !is_editing && core.current_config_path.is_some(),
-                        egui::Button::new(edit_label),
-                    )
+                    .add_enabled(!is_editing, egui::Button::new(edit_label))
                     .clicked()
                 {
                     core.edit_current_config();
                 }
                 if ui.button("🔄 Reload (update)").clicked() {
-                    core.reload_current_config();
-                }
-                if ui.button("▶ Run Tests (test)").clicked() {
-                    core.engine.run_tests();
-                }
-                if ui.button("🎹 List Ports (list)").clicked() {
-                    core.log_midi_ports();
+                    core.logger.info("reloading config...");
+                    core.reload_config();
                 }
 
                 ui.separator();
@@ -472,23 +478,23 @@ impl WindowApp {
                 }
             });
 
-            if let Some(path) = &core.current_config_path {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("Active Config: {}", path.display()))
-                            .small()
-                            .color(egui::Color32::from_rgb(160, 175, 195)),
-                    );
-                });
-            }
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Config: {}", core.config_path.display()))
+                        .small()
+                        .color(egui::Color32::from_rgb(160, 175, 195)),
+                );
+            });
         });
 
         egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("Tip: Closing this window hides ReMIDI to the system tray. Window pops up automatically on errors.")
-                        .small()
-                        .weak(),
+                    egui::RichText::new(
+                        "Tip: Closing this window hides ReMIDI to the system tray. Window pops up automatically on errors.",
+                    )
+                    .small()
+                    .weak(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Quit ReMIDI").clicked() {
@@ -541,18 +547,10 @@ impl WindowApp {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let presets = discover_remidi_files(&cwd);
-
-    let initial_config = if args.len() > 1 {
-        Some(PathBuf::from(&args[1]))
+    let config_path = if args.len() > 1 {
+        PathBuf::from(&args[1])
     } else {
-        let sample = cwd.join("Sample.remidi");
-        if sample.exists() {
-            Some(sample)
-        } else {
-            presets.first().cloned()
-        }
+        default_user_config_path().unwrap_or_else(|_| PathBuf::from("config.toml"))
     };
 
     let logger = SharedLogger::new();
@@ -560,8 +558,7 @@ fn main() -> eframe::Result<()> {
     let core = std::rc::Rc::new(std::cell::RefCell::new(ReMidiCore::new(
         logger,
         engine,
-        initial_config,
-        presets,
+        config_path,
     )));
 
     loop {
@@ -591,7 +588,6 @@ fn main() -> eframe::Result<()> {
                 app.update_ui(ctx);
             });
 
-            // If no tray icon exists on this system, closing the window should exit the app
             let mut c = core.borrow_mut();
             if c.tray_icon.is_none() {
                 c.engine.stop_all();

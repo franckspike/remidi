@@ -1,18 +1,22 @@
+use crate::config::PipelineConfig;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
-use std::path::PathBuf;
+
+pub struct PipelineMenuEntry {
+    pub pipeline_index: usize,
+    pub toggle_enabled: CheckMenuItem,
+    pub run_test: MenuId,
+    pub port_items: Vec<(CheckMenuItem, String)>,
+}
 
 pub struct TrayMenuIds {
     pub toggle_window: MenuId,
-    pub load_file: MenuId,
     pub edit_config: MenuId,
     pub reload_config: MenuId,
-    pub run_tests: MenuId,
-    pub list_ports: MenuId,
     pub toggle_verbose: CheckMenuItem,
     pub toggle_pause: CheckMenuItem,
     pub quit: MenuId,
-    pub preset_files: Vec<(MenuId, PathBuf)>,
+    pub pipelines: Vec<PipelineMenuEntry>,
 }
 
 pub fn generate_tray_icon(has_error: bool, is_paused: bool) -> Icon {
@@ -77,66 +81,105 @@ pub fn generate_tray_icon(has_error: bool, is_paused: bool) -> Icon {
     Icon::from_rgba(rgba, size, size).expect("Failed to create tray icon")
 }
 
-pub fn build_tray(presets: &[PathBuf], verbose: bool, paused: bool) -> anyhow::Result<(TrayIcon, TrayMenuIds)> {
+pub fn build_tray_menu(
+    pipelines: &[PipelineConfig],
+    midi_out_ports: &[String],
+    verbose: bool,
+    paused: bool,
+) -> anyhow::Result<(Menu, TrayMenuIds)> {
     let menu = Menu::new();
 
     let item_window = MenuItem::new("Show / Hide Log & Error Window", true, None);
-    let item_load = MenuItem::new("Load .remidi Config...", true, None);
-
-    let submenu_presets = Submenu::new("Quick Configs", !presets.is_empty());
-    let mut preset_files = Vec::new();
-    for path in presets {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            let item = MenuItem::new(name, true, None);
-            preset_files.push((item.id().clone(), path.clone()));
-            let _ = submenu_presets.append(&item);
-        }
-    }
-
-    let item_edit = MenuItem::new("Edit Current Config (edit)", true, None);
-    let item_reload = MenuItem::new("Reload Current Config (update)", true, None);
-    let item_tests = MenuItem::new("Run Test Sequence (test)", true, None);
-    let item_list = MenuItem::new("List Available MIDI Ports (list)", true, None);
-
-    let item_verbose = CheckMenuItem::new("Verbose Logging (verbose)", true, verbose, None);
-    let item_pause = CheckMenuItem::new("Pause MIDI Processing", true, paused, None);
-    let item_quit = MenuItem::new("Quit ReMIDI", true, None);
-
     menu.append(&item_window)?;
     menu.append(&PredefinedMenuItem::separator())?;
-    menu.append(&item_load)?;
-    if !presets.is_empty() {
-        menu.append(&submenu_presets)?;
+
+    let mut pipeline_entries = Vec::with_capacity(pipelines.len());
+
+    for (idx, p) in pipelines.iter().enumerate() {
+        let label = format!("{} ({})", p.id, p.virtual_port);
+        let sub = Submenu::new(&label, true);
+
+        let item_enabled = CheckMenuItem::new("Enabled", true, p.enabled, None);
+        sub.append(&item_enabled)?;
+
+        let item_test = MenuItem::new("Run Test", p.enabled && !p.test.is_empty(), None);
+        sub.append(&item_test)?;
+        sub.append(&PredefinedMenuItem::separator())?;
+
+        // List all available MIDI-out ports (excluding this pipeline's own virtual port if visible)
+        let mut port_items = Vec::new();
+        let mut found_current = false;
+
+        for port_name in midi_out_ports {
+            let is_selected =
+                *port_name == p.target_port || port_name.contains(&p.target_port);
+            if is_selected {
+                found_current = true;
+            }
+            let check = CheckMenuItem::new(port_name, true, is_selected, None);
+            sub.append(&check)?;
+            port_items.push((check, port_name.clone()));
+        }
+
+        if !found_current && !p.target_port.is_empty() {
+            let missing_label = format!("{} (disconnected)", p.target_port);
+            let check = CheckMenuItem::new(&missing_label, false, true, None);
+            sub.append(&check)?;
+        }
+
+        menu.append(&sub)?;
+        pipeline_entries.push(PipelineMenuEntry {
+            pipeline_index: idx,
+            toggle_enabled: item_enabled,
+            run_test: item_test.id().clone(),
+            port_items,
+        });
     }
+
+    if !pipelines.is_empty() {
+        menu.append(&PredefinedMenuItem::separator())?;
+    }
+
+    let item_edit = MenuItem::new("Edit Config (edit)", true, None);
+    let item_reload = MenuItem::new("Reload Config (update)", true, None);
+    let item_verbose = CheckMenuItem::new("Verbose Logging (verbose)", true, verbose, None);
+    let item_pause = CheckMenuItem::new("Pause All Pipelines", true, paused, None);
+    let item_quit = MenuItem::new("Quit ReMIDI", true, None);
+
     menu.append(&item_edit)?;
     menu.append(&item_reload)?;
-    menu.append(&item_tests)?;
-    menu.append(&item_list)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&item_verbose)?;
     menu.append(&item_pause)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&item_quit)?;
 
+    let ids = TrayMenuIds {
+        toggle_window: item_window.id().clone(),
+        edit_config: item_edit.id().clone(),
+        reload_config: item_reload.id().clone(),
+        toggle_verbose: item_verbose,
+        toggle_pause: item_pause,
+        quit: item_quit.id().clone(),
+        pipelines: pipeline_entries,
+    };
+
+    Ok((menu, ids))
+}
+
+pub fn build_tray(
+    pipelines: &[PipelineConfig],
+    midi_out_ports: &[String],
+    verbose: bool,
+    paused: bool,
+) -> anyhow::Result<(TrayIcon, TrayMenuIds)> {
+    let (menu, ids) = build_tray_menu(pipelines, midi_out_ports, verbose, paused)?;
     let icon = generate_tray_icon(false, paused);
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("ReMIDI - MIDI Filter & Transformer")
         .with_icon(icon)
         .build()?;
-
-    let ids = TrayMenuIds {
-        toggle_window: item_window.id().clone(),
-        load_file: item_load.id().clone(),
-        edit_config: item_edit.id().clone(),
-        reload_config: item_reload.id().clone(),
-        run_tests: item_tests.id().clone(),
-        list_ports: item_list.id().clone(),
-        toggle_verbose: item_verbose,
-        toggle_pause: item_pause,
-        quit: item_quit.id().clone(),
-        preset_files,
-    };
 
     Ok((tray, ids))
 }
