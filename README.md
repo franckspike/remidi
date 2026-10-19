@@ -15,6 +15,9 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
   - Auto-created from the built-in template ([`config.example.toml`](config.example.toml)) on first run.
 - **Multiple MIDI Pipelines in One Instance:**
   - Define as many `[[pipelines]]` as you need in `config.toml`.
+  - Virtual ports are automatically named `"ReMIDI [<virtual_port>]"`.
+  - Multiple pipelines can **share the same `virtual_port`** (incoming messages on that virtual port are dispatched to all enabled pipelines listening on it).
+  - Multiple pipelines can **write to the same `target_port`** (shared MIDI-out connection with mutex-synchronized packet transmission).
   - Enable/disable individual pipelines, switch their output `target_port` from a live list of connected MIDI-out ports, or run their `test` sequence directly from the System Tray menu.
   - Changes to `enabled` or `target_port` made from the tray menu are automatically saved back to `config.toml` while preserving all comments and formatting.
 - **Cross-Platform Virtual MIDI Loopback:**
@@ -40,7 +43,7 @@ See [`config.example.toml`](config.example.toml) for a fully commented example c
 [[pipelines]]
 id = "Scene Change & Tap Tempo"
 enabled = true
-virtual_port = "ReMIDI"
+virtual_port = "Main"
 target_port = "01. Ethernet MIDI"
 test = ["C0 01", "sleep 1000", "C0 04"]
 

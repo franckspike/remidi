@@ -35,7 +35,13 @@ fn default_enabled() -> bool {
 }
 
 fn default_virtual_port() -> String {
-    "ReMIDI".to_string()
+    "Main".to_string()
+}
+
+impl PipelineConfig {
+    pub fn full_virtual_port_name(&self) -> String {
+        format!("ReMIDI [{}]", self.virtual_port)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +174,8 @@ mod tests {
         assert_eq!(cfg.pipelines.len(), 2);
         assert_eq!(cfg.pipelines[0].id, "Scene Change & Tap Tempo");
         assert!(cfg.pipelines[0].enabled);
-        assert_eq!(cfg.pipelines[0].virtual_port, "ReMIDI");
+        assert_eq!(cfg.pipelines[0].virtual_port, "Main");
+        assert_eq!(cfg.pipelines[0].full_virtual_port_name(), "ReMIDI [Main]");
         assert_eq!(
             cfg.pipelines[0].parse_test_steps().unwrap(),
             vec![

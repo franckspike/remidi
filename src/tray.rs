@@ -96,7 +96,7 @@ pub fn build_tray_menu(
     let mut pipeline_entries = Vec::with_capacity(pipelines.len());
 
     for (idx, p) in pipelines.iter().enumerate() {
-        let label = format!("{} ({})", p.id, p.virtual_port);
+        let label = format!("{} ({})", p.id, p.full_virtual_port_name());
         let sub = Submenu::new(&label, true);
 
         let item_enabled = CheckMenuItem::new("Enabled", true, p.enabled, None);

@@ -2,6 +2,7 @@ use crate::config::{Config, PipelineConfig, TestAction};
 use crate::engine::{CompiledRule, RuleOutcome, format_midi_hex, parse_midi_hex, process_midi_bytes};
 use anyhow::{Context, Result, anyhow};
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -115,24 +116,41 @@ pub fn list_midi_out_ports() -> Vec<String> {
         .collect()
 }
 
-struct PipelineRuntimeState {
-    pipeline_id: String,
-    virtual_port_name: String,
-    target_port_name: String,
-    rules: Vec<CompiledRule>,
-    out_conn: Option<MidiOutputConnection>,
+/// Shared pool of open MIDI-out connections.
+/// Ensures that if multiple pipelines target the same hardware MIDI-out port:
+/// 1. The OS MIDI-out port is opened only once (preventing Windows MMSYSERR_ALLOCATED errors).
+/// 2. Concurrent `send(&bytes)` calls across pipelines are strictly serialized via a Mutex so MIDI packets never interleave.
+#[derive(Clone)]
+pub struct SharedOutputPool {
+    connections: Arc<Mutex<HashMap<String, Arc<Mutex<MidiOutputConnection>>>>>,
     logger: SharedLogger,
 }
 
-impl PipelineRuntimeState {
-    fn ensure_target_open(&mut self) -> bool {
-        if self.out_conn.is_some() {
-            return true;
+impl SharedOutputPool {
+    pub fn new(logger: SharedLogger) -> Self {
+        Self {
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            logger,
         }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut map) = self.connections.lock() {
+            map.clear();
+        }
+    }
+
+    /// Opens (or reuses an already open) MIDI-out connection for `target_port_name`.
+    pub fn ensure_open(&self, pipeline_id: &str, target_port_name: &str) -> Option<Arc<Mutex<MidiOutputConnection>>> {
+        let mut map = self.connections.lock().ok()?;
+        if let Some(existing) = map.get(target_port_name) {
+            return Some(existing.clone());
+        }
+
         let Ok(midi_out) = MidiOutput::new("ReMIDI-Out") else {
             self.logger
                 .error("Error: Could not initialize MIDI output subsystem");
-            return false;
+            return None;
         };
         let ports = midi_out.ports();
         // Match exact name first, then substring match
@@ -141,14 +159,14 @@ impl PipelineRuntimeState {
             .find(|p| {
                 midi_out
                     .port_name(p)
-                    .map(|n| n == self.target_port_name)
+                    .map(|n| n == target_port_name)
                     .unwrap_or(false)
             })
             .or_else(|| {
                 ports.iter().find(|p| {
                     midi_out
                         .port_name(p)
-                        .map(|n| n.contains(&self.target_port_name))
+                        .map(|n| n.contains(target_port_name))
                         .unwrap_or(false)
                 })
             });
@@ -156,45 +174,83 @@ impl PipelineRuntimeState {
         let Some(port) = matched_port else {
             self.logger.error(format!(
                 "[{}] Error: Could not find MIDI-out port named '{}'",
-                self.pipeline_id, self.target_port_name
+                pipeline_id, target_port_name
             ));
-            return false;
+            return None;
         };
 
         let resolved_name = midi_out
             .port_name(port)
-            .unwrap_or_else(|_| self.target_port_name.clone());
+            .unwrap_or_else(|_| target_port_name.to_string());
+
+        // Check if another pipeline already opened the same resolved port under a substring alias
+        if let Some(existing) = map.get(&resolved_name) {
+            let arc = existing.clone();
+            map.insert(target_port_name.to_string(), arc.clone());
+            return Some(arc);
+        }
 
         match midi_out.connect(port, "ReMIDI-Out-Conn") {
             Ok(conn) => {
                 self.logger.info(format!(
                     "[{}] Opened MIDI-out port '{}' (for sending)",
-                    self.pipeline_id, resolved_name
+                    pipeline_id, resolved_name
                 ));
-                self.out_conn = Some(conn);
-                true
+                let arc = Arc::new(Mutex::new(conn));
+                map.insert(target_port_name.to_string(), arc.clone());
+                if resolved_name != target_port_name {
+                    map.insert(resolved_name, arc.clone());
+                }
+                Some(arc)
             }
             Err(e) => {
                 self.logger.error(format!(
                     "[{}] Error: Could not open MIDI-out port '{}': {}",
-                    self.pipeline_id, resolved_name, e
+                    pipeline_id, resolved_name, e
                 ));
-                false
+                None
             }
         }
     }
 
-    fn set_target_port(&mut self, new_target: String) {
-        if self.target_port_name != new_target {
-            if self.out_conn.take().is_some() {
-                self.logger.info(format!(
-                    "[{}] Closed MIDI-out port '{}'",
-                    self.pipeline_id, self.target_port_name
-                ));
+    pub fn send_synchronized(&self, pipeline_id: &str, target_port_name: &str, bytes: &[u8]) -> bool {
+        let Some(conn_arc) = self.ensure_open(pipeline_id, target_port_name) else {
+            return false;
+        };
+        let send_res = if let Ok(mut conn) = conn_arc.lock() {
+            conn.send(bytes)
+        } else {
+            return false;
+        };
+
+        if let Err(e) = send_res {
+            self.logger.error(format!(
+                "[{}] Error sending to MIDI-out port '{}': {}",
+                pipeline_id, target_port_name, e
+            ));
+            if let Ok(mut map) = self.connections.lock() {
+                map.remove(target_port_name);
             }
-            self.target_port_name = new_target;
+            false
+        } else {
+            true
         }
-        let _ = self.ensure_target_open();
+    }
+}
+
+struct PipelineRuntimeState {
+    pipeline_id: String,
+    full_virtual_port_name: String,
+    target_port_name: String,
+    rules: Vec<CompiledRule>,
+    output_pool: SharedOutputPool,
+    logger: SharedLogger,
+}
+
+impl PipelineRuntimeState {
+    fn set_target_port(&mut self, new_target: String) {
+        self.target_port_name = new_target.clone();
+        let _ = self.output_pool.ensure_open(&self.pipeline_id, &new_target);
     }
 
     fn handle_incoming_midi(&mut self, bytes: &[u8]) {
@@ -212,40 +268,35 @@ impl PipelineRuntimeState {
                 ..
             }) => {
                 let out_hex = format_midi_hex(&output_bytes);
-                if self.ensure_target_open() {
-                    let send_res = if let Some(conn) = self.out_conn.as_mut() {
-                        conn.send(&output_bytes)
-                    } else {
-                        Ok(())
-                    };
-                    if let Err(e) = send_res {
-                        self.logger.error(format!(
-                            "[{}] Error sending to MIDI-out port '{}': {}",
-                            self.pipeline_id, self.target_port_name, e
-                        ));
-                        self.out_conn = None;
-                    } else {
-                        let suffix = comment
-                            .as_deref()
-                            .map(|c| format!(" [{}]", c))
-                            .unwrap_or_default();
-                        self.logger.transform(format!(
-                            "({}) {} --> {} ({}){}",
-                            self.virtual_port_name, in_hex, out_hex, self.target_port_name, suffix
-                        ));
-                    }
+                if self
+                    .output_pool
+                    .send_synchronized(&self.pipeline_id, &self.target_port_name, &output_bytes)
+                {
+                    let suffix = comment
+                        .as_deref()
+                        .map(|c| format!(" [{}]", c))
+                        .unwrap_or_default();
+                    self.logger.transform(format!(
+                        "[{}] ({}) {} --> {} ({}){}",
+                        self.pipeline_id,
+                        self.full_virtual_port_name,
+                        in_hex,
+                        out_hex,
+                        self.target_port_name,
+                        suffix
+                    ));
                 }
             }
             Ok(RuleOutcome::FilteredByDelay { .. }) => {
                 self.logger.verbose(format!(
-                    "{}: {} (filtered out by minimum delay)",
-                    self.virtual_port_name, in_hex
+                    "[{}] {}: {} (filtered out by minimum delay)",
+                    self.pipeline_id, self.full_virtual_port_name, in_hex
                 ));
             }
             Ok(RuleOutcome::NoMatch) => {
                 self.logger.verbose(format!(
-                    "{}: {} (no match, ignore)",
-                    self.virtual_port_name, in_hex
+                    "[{}] {}: {} (no match, ignore)",
+                    self.pipeline_id, self.full_virtual_port_name, in_hex
                 ));
             }
             Err(e) => {
@@ -261,10 +312,14 @@ impl PipelineRuntimeState {
 pub struct ActivePipelineHandle {
     pub pipeline_index: usize,
     state: Arc<Mutex<PipelineRuntimeState>>,
-    _backend: PipelineBackendHandle,
 }
 
-enum PipelineBackendHandle {
+struct SharedVirtualPort {
+    subscribers: Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
+    _backend: VirtualBackendHandle,
+}
+
+enum VirtualBackendHandle {
     #[allow(dead_code)]
     MidirInput(MidiInputConnection<()>),
     #[cfg(target_os = "windows")]
@@ -274,6 +329,8 @@ enum PipelineBackendHandle {
 
 pub struct MidiEngine {
     active_pipelines: Vec<ActivePipelineHandle>,
+    virtual_ports: HashMap<String, SharedVirtualPort>,
+    output_pool: SharedOutputPool,
     current_config: Option<Config>,
     logger: SharedLogger,
 }
@@ -282,6 +339,8 @@ impl MidiEngine {
     pub fn new(logger: SharedLogger) -> Self {
         Self {
             active_pipelines: Vec::new(),
+            virtual_ports: HashMap::new(),
+            output_pool: SharedOutputPool::new(logger.clone()),
             current_config: None,
             logger,
         }
@@ -289,6 +348,8 @@ impl MidiEngine {
 
     pub fn stop_all(&mut self) {
         self.active_pipelines.clear();
+        self.virtual_ports.clear();
+        self.output_pool.clear();
     }
 
     pub fn current_config(&self) -> Option<&Config> {
@@ -300,14 +361,16 @@ impl MidiEngine {
 
         let mut any_error = false;
         for (idx, pipeline_cfg) in config.pipelines.iter().enumerate() {
+            let full_vport = pipeline_cfg.full_virtual_port_name();
             if !pipeline_cfg.enabled {
                 self.logger.info(format!(
-                    "[{}] Pipeline disabled (skipping virtual port '{}')",
-                    pipeline_cfg.id, pipeline_cfg.virtual_port
+                    "[{}] Pipeline disabled (skipping '{}')",
+                    pipeline_cfg.id, full_vport
                 ));
                 continue;
             }
-            match start_pipeline(idx, pipeline_cfg, self.logger.clone()) {
+
+            match self.register_pipeline(idx, pipeline_cfg) {
                 Ok(handle) => self.active_pipelines.push(handle),
                 Err(e) => {
                     self.logger.error(format!("{:#}", e));
@@ -320,6 +383,66 @@ impl MidiEngine {
             self.logger.info("listening...");
         }
         Ok(())
+    }
+
+    fn register_pipeline(
+        &mut self,
+        pipeline_index: usize,
+        pipeline_cfg: &PipelineConfig,
+    ) -> Result<ActivePipelineHandle> {
+        let mut compiled_rules = Vec::with_capacity(pipeline_cfg.rules.len());
+        for r in &pipeline_cfg.rules {
+            compiled_rules.push(CompiledRule::compile(r)?);
+        }
+
+        let full_virtual_port_name = pipeline_cfg.full_virtual_port_name();
+
+        // Eagerly open (or share) the target MIDI-out port
+        let _ = self
+            .output_pool
+            .ensure_open(&pipeline_cfg.id, &pipeline_cfg.target_port);
+
+        let runtime = PipelineRuntimeState {
+            pipeline_id: pipeline_cfg.id.clone(),
+            full_virtual_port_name: full_virtual_port_name.clone(),
+            target_port_name: pipeline_cfg.target_port.clone(),
+            rules: compiled_rules,
+            output_pool: self.output_pool.clone(),
+            logger: self.logger.clone(),
+        };
+
+        let state = Arc::new(Mutex::new(runtime));
+
+        // If a virtual port with this name already exists, subscribe this pipeline to it!
+        if let Some(existing_vport) = self.virtual_ports.get(&full_virtual_port_name) {
+            if let Ok(mut subs) = existing_vport.subscribers.lock() {
+                subs.push(state.clone());
+            }
+            self.logger.info(format!(
+                "[{}] Subscribed to shared MIDI-out port '{}' (for receiving)",
+                pipeline_cfg.id, full_virtual_port_name
+            ));
+        } else {
+            let subscribers = Arc::new(Mutex::new(vec![state.clone()]));
+            let backend = create_virtual_backend(
+                &pipeline_cfg.id,
+                &full_virtual_port_name,
+                subscribers.clone(),
+                &self.logger,
+            )?;
+            self.virtual_ports.insert(
+                full_virtual_port_name,
+                SharedVirtualPort {
+                    subscribers,
+                    _backend: backend,
+                },
+            );
+        }
+
+        Ok(ActivePipelineHandle {
+            pipeline_index,
+            state,
+        })
     }
 
     pub fn set_pipeline_target_port(&mut self, pipeline_idx: usize, new_target: String) {
@@ -412,59 +535,37 @@ impl MidiEngine {
     }
 }
 
-fn start_pipeline(
-    pipeline_index: usize,
-    pipeline_cfg: &PipelineConfig,
-    logger: SharedLogger,
-) -> Result<ActivePipelineHandle> {
-    let mut compiled_rules = Vec::with_capacity(pipeline_cfg.rules.len());
-    for r in &pipeline_cfg.rules {
-        compiled_rules.push(CompiledRule::compile(r)?);
-    }
-
-    let mut runtime = PipelineRuntimeState {
-        pipeline_id: pipeline_cfg.id.clone(),
-        virtual_port_name: pipeline_cfg.virtual_port.clone(),
-        target_port_name: pipeline_cfg.target_port.clone(),
-        rules: compiled_rules,
-        out_conn: None,
-        logger: logger.clone(),
+fn dispatch_to_subscribers(
+    subscribers: &Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
+    message: &[u8],
+) {
+    let list = if let Ok(guard) = subscribers.lock() {
+        guard.clone()
+    } else {
+        return;
     };
-
-    let _ = runtime.ensure_target_open();
-
-    let state = Arc::new(Mutex::new(runtime));
-    let backend = create_virtual_or_input_backend(
-        &pipeline_cfg.id,
-        &pipeline_cfg.virtual_port,
-        state.clone(),
-        &logger,
-    )?;
-
-    Ok(ActivePipelineHandle {
-        pipeline_index,
-        state,
-        _backend: backend,
-    })
+    for sub in list {
+        if let Ok(mut state) = sub.lock() {
+            state.handle_incoming_midi(message);
+        }
+    }
 }
 
 #[cfg(unix)]
-fn create_virtual_or_input_backend(
+fn create_virtual_backend(
     pipeline_id: &str,
     port_name: &str,
-    state: Arc<Mutex<PipelineRuntimeState>>,
+    subscribers: Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
     logger: &SharedLogger,
-) -> Result<PipelineBackendHandle> {
+) -> Result<VirtualBackendHandle> {
     use midir::os::unix::VirtualInput;
     let midi_in = MidiInput::new("ReMIDI").context("Failed to initialize ALSA/JACK MidiInput")?;
-    let state_cb = state.clone();
+    let subs_cb = subscribers;
     let conn = midi_in
         .create_virtual(
             port_name,
             move |_stamp, message, _| {
-                if let Ok(mut guard) = state_cb.lock() {
-                    guard.handle_incoming_midi(message);
-                }
+                dispatch_to_subscribers(&subs_cb, message);
             },
             (),
         )
@@ -481,23 +582,23 @@ fn create_virtual_or_input_backend(
         "[{}] Created MIDI-out port '{}' (for receiving)",
         pipeline_id, port_name
     ));
-    Ok(PipelineBackendHandle::MidirInput(conn))
+    Ok(VirtualBackendHandle::MidirInput(conn))
 }
 
 #[cfg(target_os = "windows")]
-fn create_virtual_or_input_backend(
+fn create_virtual_backend(
     pipeline_id: &str,
     port_name: &str,
-    state: Arc<Mutex<PipelineRuntimeState>>,
+    subscribers: Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
     logger: &SharedLogger,
-) -> Result<PipelineBackendHandle> {
-    match windows_virtual::TeVirtualPortGuard::create(port_name, state.clone(), logger) {
+) -> Result<VirtualBackendHandle> {
+    match windows_virtual::TeVirtualPortGuard::create(port_name, subscribers, logger) {
         Ok(guard) => {
             logger.info(format!(
                 "[{}] Created MIDI-out port '{}' (for receiving via teVirtualMIDI)",
                 pipeline_id, port_name
             ));
-            Ok(PipelineBackendHandle::TeVirtualMidi(guard))
+            Ok(VirtualBackendHandle::TeVirtualMidi(guard))
         }
         Err(te_err) => Err(anyhow!(
             "[{}] Error: Could not create virtual MIDI-out port '{}': {}",
@@ -510,13 +611,15 @@ fn create_virtual_or_input_backend(
 
 #[cfg(target_os = "windows")]
 mod windows_virtual {
-    use super::{PipelineRuntimeState, SharedLogger};
+    use super::{PipelineRuntimeState, SharedLogger, dispatch_to_subscribers};
     use anyhow::{Context, Result, bail};
     use libloading::{Library, Symbol};
     use std::ffi::c_void;
     use std::sync::{Arc, Mutex};
 
     type LPVM_MIDI_PORT = *mut c_void;
+    type SubscribersList = Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>;
+
     type TeVmCallback = unsafe extern "system" fn(
         midi_port: LPVM_MIDI_PORT,
         midi_data_bytes: *const u8,
@@ -540,7 +643,7 @@ mod windows_virtual {
         _lib: Library,
         port: LPVM_MIDI_PORT,
         close_fn: FnClosePort,
-        cb_ctx_ptr: *mut Arc<Mutex<PipelineRuntimeState>>,
+        cb_ctx_ptr: *mut SubscribersList,
     }
 
     unsafe impl Send for TeVirtualPortGuard {}
@@ -555,17 +658,15 @@ mod windows_virtual {
         if midi_data_bytes.is_null() || length == 0 || callback_instance == 0 {
             return;
         }
-        let state_arc = unsafe { &*(callback_instance as *const Arc<Mutex<PipelineRuntimeState>>) };
+        let subscribers = unsafe { &*(callback_instance as *const SubscribersList) };
         let slice = unsafe { std::slice::from_raw_parts(midi_data_bytes, length as usize) };
-        if let Ok(mut guard) = state_arc.lock() {
-            guard.handle_incoming_midi(slice);
-        }
+        dispatch_to_subscribers(subscribers, slice);
     }
 
     impl TeVirtualPortGuard {
         pub fn create(
             port_name: &str,
-            state: Arc<Mutex<PipelineRuntimeState>>,
+            subscribers: SubscribersList,
             _logger: &SharedLogger,
         ) -> Result<Self> {
             unsafe {
@@ -583,8 +684,8 @@ mod windows_virtual {
 
                 let wide_name: Vec<u16> =
                     port_name.encode_utf16().chain(std::iter::once(0)).collect();
-                let boxed_state = Box::new(state);
-                let cb_ctx_ptr = Box::into_raw(boxed_state);
+                let boxed_subs = Box::new(subscribers);
+                let cb_ctx_ptr = Box::into_raw(boxed_subs);
 
                 let port = create_fn(
                     wide_name.as_ptr(),

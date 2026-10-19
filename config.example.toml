@@ -6,11 +6,12 @@
 #   - Linux:   ~/.config/remidi/config.toml
 #   - Windows: %APPDATA%\remidi\config.toml
 #
-# ReMIDI supports multiple independent MIDI pipelines in a single instance.
-# Each [[pipelines]] block creates its own `virtual_port` (visible to DAWs/apps
-# as a MIDI Output port), matches and transforms incoming MIDI messages using
-# regular expressions on uppercase hexadecimal byte strings, and forwards
-# matching messages to `target_port`.
+# ReMIDI supports multiple MIDI pipelines in a single instance:
+#   - Virtual ports are automatically named "ReMIDI [<virtual_port>]".
+#   - Multiple pipelines can share the same `virtual_port` (incoming messages
+#     on that virtual port are dispatched to all enabled pipelines using it).
+#   - Multiple pipelines can write to the same `target_port` (outgoing MIDI
+#     packets are synchronized via a shared connection lock).
 #
 # You can toggle each pipeline's `enabled` state, change its `target_port`
 # from the detected system MIDI-out ports, or run its `test` sequence directly
@@ -37,11 +38,12 @@
 
 # -----------------------------------------------------------------------------
 # Pipeline 1: Program Change -> Note On (Scene Change) & Note On -> Tap Tempo
+# Creates virtual port: "ReMIDI [Main]"
 # -----------------------------------------------------------------------------
 [[pipelines]]
 id = "Scene Change & Tap Tempo"
 enabled = true
-virtual_port = "ReMIDI"
+virtual_port = "Main"
 target_port = "01. Ethernet MIDI"
 test = ["C0 01", "sleep 1000", "C0 04"]
 
@@ -60,11 +62,12 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 
 # -----------------------------------------------------------------------------
 # Pipeline 2: Channel 1 -> Channel 2 Program Change (1-based to 0-based)
+# Shares virtual port "ReMIDI [Main]" and target_port "01. Ethernet MIDI"
 # -----------------------------------------------------------------------------
 [[pipelines]]
 id = "G-Major Direct"
 enabled = false
-virtual_port = "ReMIDI Direct"
+virtual_port = "Main"
 target_port = "01. Ethernet MIDI"
 test = ["C0 01", "sleep 1000", "C0 04"]
 
