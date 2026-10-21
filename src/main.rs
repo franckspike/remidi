@@ -13,9 +13,7 @@ use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_out_ports};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tray::{TrayMenuIds, build_tray, build_tray_menu, generate_tray_icon};
 use tray_icon::TrayIcon;
@@ -90,7 +88,7 @@ fn find_linux_terminal() -> Option<&'static str> {
     None
 }
 
-fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<()> {
+fn spawn_editor(path: &Path, logger: &SharedLogger) -> anyhow::Result<()> {
     let editor = env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -123,10 +121,10 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
         let mut cmd = prepare_child_command(Command::new(term));
         match term {
             "gnome-terminal" => {
-                cmd.arg("--wait").arg("--").arg(bin);
+                cmd.arg("--").arg(bin);
             }
             "xfce4-terminal" => {
-                cmd.arg("--disable-server").arg("-x").arg(bin);
+                cmd.arg("-x").arg(bin);
             }
             "wezterm" => {
                 cmd.arg("start").arg("--always-new-process").arg("--").arg(bin);
@@ -142,10 +140,7 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
             cmd.arg(a);
         }
         cmd.arg(path);
-        let status = cmd.status()?;
-        if !status.success() {
-            anyhow::bail!("Editor exited with status {}", status);
-        }
+        cmd.spawn()?;
         return Ok(());
     }
 
@@ -154,20 +149,8 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
     for a in extra_args {
         cmd.arg(a);
     }
-    let bin_name = Path::new(bin)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(bin);
-    if matches!(bin_name, "code" | "code.cmd" | "codium" | "subl" | "zed")
-        && !extra_args.iter().any(|&a| a == "--wait" || a == "-w")
-    {
-        cmd.arg("--wait");
-    }
     cmd.arg(path);
-    let status = cmd.status()?;
-    if !status.success() {
-        anyhow::bail!("Editor '{}' exited with status {}", editor, status);
-    }
+    cmd.spawn()?;
     Ok(())
 }
 
@@ -183,8 +166,6 @@ struct ReMidiCore {
     auto_scroll: bool,
     only_errors: bool,
     icon_has_error: bool,
-    reload_pending: Arc<AtomicBool>,
-    editing_in_progress: Arc<AtomicBool>,
 }
 
 impl ReMidiCore {
@@ -215,8 +196,6 @@ impl ReMidiCore {
             auto_scroll: true,
             only_errors: false,
             icon_has_error: false,
-            reload_pending: Arc::new(AtomicBool::new(false)),
-            editing_in_progress: Arc::new(AtomicBool::new(false)),
         };
 
         core.logger.info("----- ReMIDI -----");
@@ -273,36 +252,13 @@ impl ReMidiCore {
     }
 
     fn edit_current_config(&mut self) {
-        if self.editing_in_progress.swap(true, Ordering::SeqCst) {
-            self.logger
-                .info("An editor session is already open for config.toml.");
-            return;
+        if let Err(e) = spawn_editor(&self.config_path, &self.logger) {
+            self.logger.error(format!(
+                "Error launching editor for '{}': {}",
+                self.config_path.display(),
+                e
+            ));
         }
-
-        let path = self.config_path.clone();
-        let logger = self.logger.clone();
-        let reload_pending = self.reload_pending.clone();
-        let editing_in_progress = self.editing_in_progress.clone();
-
-        thread::spawn(move || {
-            match spawn_editor_and_wait(&path, &logger) {
-                Ok(()) => {
-                    logger.info(format!(
-                        "Finished editing '{}', reloading...",
-                        path.display()
-                    ));
-                    reload_pending.store(true, Ordering::SeqCst);
-                }
-                Err(e) => {
-                    logger.error(format!(
-                        "Error launching editor for '{}': {}",
-                        path.display(),
-                        e
-                    ));
-                }
-            }
-            editing_in_progress.store(false, Ordering::SeqCst);
-        });
     }
 
     fn toggle_pipeline_enabled(&mut self, pipeline_idx: usize) {
@@ -348,10 +304,6 @@ impl ReMidiCore {
         #[cfg(target_os = "linux")]
         while gtk::events_pending() {
             gtk::main_iteration_do(false);
-        }
-
-        if self.reload_pending.swap(false, Ordering::SeqCst) {
-            self.reload_config();
         }
 
         // Periodically check if connected MIDI-out ports changed so tray menu stays up to date
@@ -554,16 +506,7 @@ impl WindowApp {
                     render_pipelines_menu(ui, &mut core);
                 });
 
-                let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
-                let edit_label = if is_editing {
-                    "✏ Editing..."
-                } else {
-                    "✏ Edit Config (edit)"
-                };
-                if ui
-                    .add_enabled(!is_editing, egui::Button::new(edit_label))
-                    .clicked()
-                {
+                if ui.button("✏ Edit Config (edit)").clicked() {
                     core.edit_current_config();
                 }
                 if ui.button("🔄 Reload (update)").clicked() {
