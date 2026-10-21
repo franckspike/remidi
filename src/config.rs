@@ -56,7 +56,7 @@ pub struct RuleConfig {
     #[serde(rename = "match")]
     pub match_pattern: String,
     pub replace: String,
-    #[serde(default, alias = "min_delay_ms")]
+    #[serde(default)]
     pub debounce_ms: u64,
     #[serde(default)]
     pub dec_second_byte: bool,
@@ -197,22 +197,5 @@ mod tests {
         assert_eq!(cfg.pipelines[0].rules[0].debounce_ms, 500);
         assert!(!cfg.pipelines[1].enabled);
         assert!(cfg.pipelines[1].rules[0].dec_second_byte);
-    }
-
-    #[test]
-    fn test_backward_compatibility_min_delay_ms_alias() {
-        let toml_data = r#"
-[[pipelines]]
-id = "Legacy Pipeline"
-virtual_port = "Main"
-target_port = "Out"
-
-  [[pipelines.rules]]
-  match = 'C0 \w\w'
-  replace = '90 01 7F'
-  min_delay_ms = 350
-"#;
-        let cfg = Config::parse_str(toml_data, Path::new("test.toml")).unwrap();
-        assert_eq!(cfg.pipelines[0].rules[0].debounce_ms, 350);
     }
 }
