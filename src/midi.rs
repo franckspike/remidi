@@ -183,24 +183,29 @@ impl SharedOutputPool {
         target_port_name: &str,
     ) -> Option<Arc<Mutex<OutputConnection>>> {
         let mut map = self.connections.lock().ok()?;
-        if let Some(existing) = map.get(target_port_name) {
-            return Some(existing.clone());
-        }
 
         #[cfg(target_os = "linux")]
         {
+            if let Some(existing) = map.get(pipeline_id)
+                && let Ok(guard) = existing.lock()
+            {
+                let OutputConnection::Alsa(ref sender) = *guard;
+                if sender.resolved_name == target_port_name
+                    || target_port_name.is_empty()
+                    || sender.resolved_name.contains(target_port_name)
+                {
+                    return Some(existing.clone());
+                }
+            }
+
             let Some(client) = &self.alsa_client else {
                 self.logger.error("ALSA client not initialized");
                 return None;
             };
             match client.open_output_port(pipeline_id, target_port_name) {
                 Ok(sender) => {
-                    let resolved_name = sender.resolved_name.clone();
                     let arc = Arc::new(Mutex::new(OutputConnection::Alsa(sender)));
-                    map.insert(target_port_name.to_string(), arc.clone());
-                    if resolved_name != target_port_name {
-                        map.insert(resolved_name, arc.clone());
-                    }
+                    map.insert(pipeline_id.to_string(), arc.clone());
                     Some(arc)
                 }
                 Err(e) => {
@@ -212,6 +217,10 @@ impl SharedOutputPool {
 
         #[cfg(not(target_os = "linux"))]
         {
+            if let Some(existing) = map.get(target_port_name) {
+                return Some(existing.clone());
+            }
+
             let Ok(midi_out) = MidiOutput::new("ReMIDI-Out") else {
                 self.logger
                     .error("Error: Could not initialize MIDI output subsystem");

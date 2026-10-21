@@ -159,9 +159,8 @@ impl AlsaClient {
             ));
         };
 
-        let sender_port_name = format!("ReMIDI-Out [{}]", resolved_name);
-        let c_sender_name = CString::new(sender_port_name.as_str())
-            .unwrap_or_else(|_| CString::new("ReMIDI-Out").unwrap());
+        let c_sender_name =
+            CString::new(pipeline_id).unwrap_or_else(|_| CString::new("Output").unwrap());
 
         let sender_port = seq
             .create_simple_port(
@@ -478,6 +477,12 @@ mod tests {
         // If Midi Through exists on this Linux system, test opening an output connection
         if let Ok(mut sender) = client.open_output_port("test_pipeline", "Midi Through") {
             assert_eq!(sender.sub.get_sender().client, client_id);
+            let seq = client.seq.lock().unwrap();
+            let pinfo = seq
+                .get_any_port_info(sender.sub.get_sender())
+                .expect("Sender port should exist");
+            assert_eq!(pinfo.get_name().unwrap(), "test_pipeline");
+            drop(seq);
             // Test sending MIDI note on
             assert!(sender.send(&[0x90, 0x3C, 0x64]).is_ok());
         }
