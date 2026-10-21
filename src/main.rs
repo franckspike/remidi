@@ -498,87 +498,10 @@ impl WindowApp {
         ctx.request_repaint_after(Duration::from_millis(80));
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
-                    let edit_label = if is_editing {
-                        "✏ Editing..."
-                    } else {
-                        "✏ Edit Config (edit)"
-                    };
-                    if ui
-                        .add_enabled(!is_editing, egui::Button::new(edit_label))
-                        .clicked()
-                    {
-                        ui.close_menu();
-                        core.edit_current_config();
-                    }
-                    if ui.button("🔄 Reload Config (update)").clicked() {
-                        ui.close_menu();
-                        core.logger.info("reloading config...");
-                        core.reload_config();
-                    }
-                    ui.separator();
-                    if core.tray_icon.is_some() && ui.button("Hide to Tray").clicked() {
-                        ui.close_menu();
-                        core.window_visible = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    if ui.button("Quit ReMIDI").clicked() {
-                        core.engine.stop_all();
-                        std::process::exit(0);
-                    }
-                });
-
-                ui.menu_button("Pipelines", |ui| {
-                    render_pipelines_menu(ui, &mut core);
-                });
-
-                ui.menu_button("Options", |ui| {
-                    let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
-                    if ui.checkbox(&mut verbose, "Verbose Logging").changed() {
-                        core.logger.verbose.store(verbose, Ordering::Relaxed);
-                        if let Some(ids) = &core.tray_ids {
-                            ids.toggle_verbose.set_checked(verbose);
-                        }
-                        core.logger.info(if verbose {
-                            "Verbose is ON"
-                        } else {
-                            "Verbose is OFF"
-                        });
-                    }
-
-                    let mut paused = core.logger.paused.load(Ordering::Relaxed);
-                    if ui.checkbox(&mut paused, "Pause All Pipelines").changed() {
-                        core.logger.paused.store(paused, Ordering::Relaxed);
-                        if let Some(ids) = &core.tray_ids {
-                            ids.toggle_pause.set_checked(paused);
-                        }
-                        core.update_tray_icon();
-                    }
-
-                    ui.separator();
-                    ui.checkbox(&mut core.only_errors, "Errors Only");
-                    ui.checkbox(&mut core.auto_scroll, "Auto-scroll Logs");
-
-                    ui.separator();
-                    if ui.button("🗑 Clear Logs").clicked() {
-                        ui.close_menu();
-                        core.logger.clear();
-                        core.icon_has_error = false;
-                        core.update_tray_icon();
-                    }
-                });
-            });
-
-            ui.separator();
-
             ui.horizontal_wrapped(|ui| {
                 ui.menu_button("🔀 Pipelines", |ui| {
                     render_pipelines_menu(ui, &mut core);
                 });
-
-                ui.separator();
 
                 let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
                 let edit_label = if is_editing {
@@ -597,6 +520,10 @@ impl WindowApp {
                     core.reload_config();
                 }
 
+                if ui.button("🧪 Test all").clicked() {
+                    core.engine.run_all_pipeline_tests();
+                }
+
                 ui.separator();
 
                 let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
@@ -613,7 +540,7 @@ impl WindowApp {
                 }
 
                 let mut paused = core.logger.paused.load(Ordering::Relaxed);
-                if ui.checkbox(&mut paused, "Paused").changed() {
+                if ui.checkbox(&mut paused, "Pause all").changed() {
                     core.logger.paused.store(paused, Ordering::Relaxed);
                     if let Some(ids) = &core.tray_ids {
                         ids.toggle_pause.set_checked(paused);
@@ -629,6 +556,13 @@ impl WindowApp {
                     core.icon_has_error = false;
                     core.update_tray_icon();
                 }
+
+                ui.separator();
+
+                if ui.button("Quit").clicked() {
+                    core.engine.stop_all();
+                    std::process::exit(0);
+                }
             });
 
             ui.horizontal(|ui| {
@@ -637,28 +571,6 @@ impl WindowApp {
                         .small()
                         .color(egui::Color32::from_rgb(160, 175, 195)),
                 );
-            });
-        });
-
-        egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(
-                        "Tip: Closing this window hides ReMIDI to the system tray. Window pops up automatically on errors.",
-                    )
-                    .small()
-                    .weak(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Quit ReMIDI").clicked() {
-                        core.engine.stop_all();
-                        std::process::exit(0);
-                    }
-                    if core.tray_icon.is_some() && ui.button("Hide to Tray").clicked() {
-                        core.window_visible = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
             });
         });
 

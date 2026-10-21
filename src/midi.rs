@@ -621,6 +621,75 @@ impl MidiEngine {
             logger.info(format!("[{}] tests completed.", pipeline_id));
         });
     }
+
+    pub fn run_all_pipeline_tests(&self) {
+        let Some(cfg) = &self.current_config else {
+            self.logger
+                .error("Cannot run tests: no configuration loaded.");
+            return;
+        };
+        let mut to_run = Vec::new();
+        for (idx, pipeline_cfg) in cfg.pipelines.iter().enumerate() {
+            if !pipeline_cfg.enabled || pipeline_cfg.test.is_empty() {
+                continue;
+            }
+            let Some(active) = self
+                .active_pipelines
+                .iter()
+                .find(|a| a.pipeline_index == idx)
+            else {
+                continue;
+            };
+            match pipeline_cfg.parse_test_steps() {
+                Ok(steps) if !steps.is_empty() => {
+                    to_run.push((pipeline_cfg.id.clone(), active.state.clone(), steps));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    self.logger.error(format!(
+                        "[{}] Invalid test configuration: {:#}",
+                        pipeline_cfg.id, e
+                    ));
+                }
+            }
+        }
+
+        if to_run.is_empty() {
+            self.logger
+                .info("No enabled pipelines have test steps defined.");
+            return;
+        }
+
+        let logger = self.logger.clone();
+        thread::spawn(move || {
+            logger.info("Executing tests for all enabled pipelines...");
+            for (pipeline_id, state, steps) in to_run {
+                logger.info(format!("[{}] executing tests...", pipeline_id));
+                for step in steps {
+                    match step {
+                        TestAction::Send(message) => match parse_midi_hex(&message, false) {
+                            Ok(bytes) => {
+                                if let Ok(mut guard) = state.lock() {
+                                    guard.handle_incoming_midi(&bytes);
+                                }
+                            }
+                            Err(e) => {
+                                logger.error(format!(
+                                    "[{}] Invalid test message '{}': {}",
+                                    pipeline_id, message, e
+                                ));
+                            }
+                        },
+                        TestAction::Sleep(ms) => {
+                            thread::sleep(Duration::from_millis(ms));
+                        }
+                    }
+                }
+                logger.info(format!("[{}] tests completed.", pipeline_id));
+            }
+            logger.info("All pipeline tests completed.");
+        });
+    }
 }
 
 pub(crate) fn dispatch_to_subscribers(
