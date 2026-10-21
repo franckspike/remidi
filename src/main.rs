@@ -406,6 +406,77 @@ impl ReMidiCore {
     }
 }
 
+fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
+    let Some(cfg) = core.engine.current_config().cloned() else {
+        ui.label(egui::RichText::new("No configuration loaded").weak());
+        return;
+    };
+    if cfg.pipelines.is_empty() {
+        ui.label(egui::RichText::new("No pipelines configured").weak());
+        return;
+    }
+
+    let mut toggle_idx = None;
+    let mut test_idx = None;
+    let mut port_change = None;
+
+    for (idx, p) in cfg.pipelines.iter().enumerate() {
+        let label = format!("{} ({})", p.id, p.full_virtual_port_name());
+        ui.menu_button(&label, |ui| {
+            let mut enabled = p.enabled;
+            if ui.checkbox(&mut enabled, "Enabled").changed() {
+                ui.close_menu();
+                toggle_idx = Some(idx);
+            }
+
+            let can_test = p.enabled && !p.test.is_empty();
+            if ui
+                .add_enabled(can_test, egui::Button::new("Run Test"))
+                .clicked()
+            {
+                ui.close_menu();
+                test_idx = Some(idx);
+            }
+
+            ui.separator();
+            ui.label(egui::RichText::new("Target Output Port:").small().weak());
+
+            let mut found_current = false;
+            for port_name in &core.cached_midi_ports {
+                let is_selected =
+                    *port_name == p.target_port || port_name.contains(&p.target_port);
+                if is_selected {
+                    found_current = true;
+                }
+                let mut checked = is_selected;
+                if ui.checkbox(&mut checked, port_name).clicked() {
+                    ui.close_menu();
+                    port_change = Some((idx, port_name.clone()));
+                }
+            }
+
+            if !found_current && !p.target_port.is_empty() {
+                let missing_label = format!("{} (disconnected)", p.target_port);
+                let mut checked = true;
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut checked, missing_label),
+                );
+            }
+        });
+    }
+
+    if let Some(idx) = toggle_idx {
+        core.toggle_pipeline_enabled(idx);
+    }
+    if let Some(idx) = test_idx {
+        core.engine.run_pipeline_test(idx);
+    }
+    if let Some((idx, port)) = port_change {
+        core.select_pipeline_target_port(idx, port);
+    }
+}
+
 struct WindowApp {
     core: std::rc::Rc<std::cell::RefCell<ReMidiCore>>,
 }
@@ -427,7 +498,88 @@ impl WindowApp {
         ctx.request_repaint_after(Duration::from_millis(80));
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
+                    let edit_label = if is_editing {
+                        "✏ Editing..."
+                    } else {
+                        "✏ Edit Config (edit)"
+                    };
+                    if ui
+                        .add_enabled(!is_editing, egui::Button::new(edit_label))
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        core.edit_current_config();
+                    }
+                    if ui.button("🔄 Reload Config (update)").clicked() {
+                        ui.close_menu();
+                        core.logger.info("reloading config...");
+                        core.reload_config();
+                    }
+                    ui.separator();
+                    if core.tray_icon.is_some() && ui.button("Hide to Tray").clicked() {
+                        ui.close_menu();
+                        core.window_visible = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Quit ReMIDI").clicked() {
+                        core.engine.stop_all();
+                        std::process::exit(0);
+                    }
+                });
+
+                ui.menu_button("Pipelines", |ui| {
+                    render_pipelines_menu(ui, &mut core);
+                });
+
+                ui.menu_button("Options", |ui| {
+                    let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
+                    if ui.checkbox(&mut verbose, "Verbose Logging").changed() {
+                        core.logger.verbose.store(verbose, Ordering::Relaxed);
+                        if let Some(ids) = &core.tray_ids {
+                            ids.toggle_verbose.set_checked(verbose);
+                        }
+                        core.logger.info(if verbose {
+                            "Verbose is ON"
+                        } else {
+                            "Verbose is OFF"
+                        });
+                    }
+
+                    let mut paused = core.logger.paused.load(Ordering::Relaxed);
+                    if ui.checkbox(&mut paused, "Pause All Pipelines").changed() {
+                        core.logger.paused.store(paused, Ordering::Relaxed);
+                        if let Some(ids) = &core.tray_ids {
+                            ids.toggle_pause.set_checked(paused);
+                        }
+                        core.update_tray_icon();
+                    }
+
+                    ui.separator();
+                    ui.checkbox(&mut core.only_errors, "Errors Only");
+                    ui.checkbox(&mut core.auto_scroll, "Auto-scroll Logs");
+
+                    ui.separator();
+                    if ui.button("🗑 Clear Logs").clicked() {
+                        ui.close_menu();
+                        core.logger.clear();
+                        core.icon_has_error = false;
+                        core.update_tray_icon();
+                    }
+                });
+            });
+
+            ui.separator();
+
             ui.horizontal_wrapped(|ui| {
+                ui.menu_button("🔀 Pipelines", |ui| {
+                    render_pipelines_menu(ui, &mut core);
+                });
+
+                ui.separator();
+
                 let is_editing = core.editing_in_progress.load(Ordering::Relaxed);
                 let edit_label = if is_editing {
                     "✏ Editing..."
