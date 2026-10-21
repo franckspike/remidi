@@ -176,7 +176,7 @@ impl ReMidiCore {
             tray_ids,
             cached_midi_ports,
             last_port_check: Instant::now(),
-            window_visible: false,
+            window_visible: true,
             auto_scroll: true,
             only_errors: false,
             icon_has_error: false,
