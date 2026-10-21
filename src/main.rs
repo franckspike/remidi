@@ -7,7 +7,7 @@ mod engine;
 mod midi;
 mod tray;
 
-use config::{Config, default_user_config_path, ensure_user_config_exists};
+use config::{AppSettings, Config, default_user_config_path, ensure_user_config_exists};
 use eframe::egui;
 use midi::{LogLevel, MidiEngine, SharedLogger, list_midi_out_ports};
 use std::env;
@@ -158,11 +158,13 @@ struct ReMidiCore {
     logger: SharedLogger,
     engine: MidiEngine,
     config_path: PathBuf,
+    settings_path: PathBuf,
     tray_icon: Option<TrayIcon>,
     tray_ids: Option<TrayMenuIds>,
     cached_midi_ports: Vec<String>,
     last_port_check: Instant,
     window_visible: bool,
+    start_minimized: bool,
     auto_scroll: bool,
     only_errors: bool,
     icon_has_error: bool,
@@ -175,8 +177,19 @@ impl ReMidiCore {
             let _ = gtk::init();
         }
 
+        let settings_path = config_path.with_file_name("settings.toml");
+        let settings = AppSettings::load_from_file(&settings_path);
+
+        logger.verbose.store(settings.verbose, Ordering::Relaxed);
+        logger.paused.store(settings.pause_all, Ordering::Relaxed);
+
         let cached_midi_ports = list_midi_out_ports();
-        let (tray_icon, tray_ids) = match build_tray(&[], &cached_midi_ports, false, false) {
+        let (tray_icon, tray_ids) = match build_tray(
+            &[],
+            &cached_midi_ports,
+            settings.verbose,
+            settings.pause_all,
+        ) {
             Ok((t, ids)) => (Some(t), Some(ids)),
             Err(e) => {
                 logger.error(format!("Warning: Could not initialize system tray icon: {}", e));
@@ -184,17 +197,21 @@ impl ReMidiCore {
             }
         };
 
+        let initial_window_visible = !(settings.start_minimized && tray_icon.is_some());
+
         let mut core = Self {
             logger,
             engine,
             config_path,
+            settings_path,
             tray_icon,
             tray_ids,
             cached_midi_ports,
             last_port_check: Instant::now(),
-            window_visible: true,
-            auto_scroll: true,
-            only_errors: false,
+            window_visible: initial_window_visible,
+            start_minimized: settings.start_minimized,
+            auto_scroll: settings.auto_scroll,
+            only_errors: settings.only_errors,
             icon_has_error: false,
         };
 
@@ -209,7 +226,21 @@ impl ReMidiCore {
             core.window_visible = true;
         }
 
+        core.update_tray_icon();
         core
+    }
+
+    fn save_settings(&self) {
+        let settings = AppSettings {
+            start_minimized: self.start_minimized,
+            verbose: self.logger.verbose.load(Ordering::Relaxed),
+            pause_all: self.logger.paused.load(Ordering::Relaxed),
+            only_errors: self.only_errors,
+            auto_scroll: self.auto_scroll,
+        };
+        if let Err(e) = settings.save_to_file(&self.settings_path) {
+            self.logger.error(format!("Failed to save settings: {:#}", e));
+        }
     }
 
     fn rebuild_tray_menu(&mut self) {
@@ -342,6 +373,7 @@ impl ReMidiCore {
                 } else {
                     "Verbose is OFF"
                 });
+                self.save_settings();
             } else if event.id == ids.toggle_pause.id() {
                 let new_val = !self.logger.paused.load(Ordering::Relaxed);
                 self.logger.paused.store(new_val, Ordering::Relaxed);
@@ -352,6 +384,7 @@ impl ReMidiCore {
                     "MIDI processing RESUMED"
                 });
                 self.update_tray_icon();
+                self.save_settings();
             } else if event.id == ids.quit {
                 self.engine.stop_all();
                 std::process::exit(0);
@@ -467,12 +500,19 @@ fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
 struct WindowApp {
     core: std::rc::Rc<std::cell::RefCell<ReMidiCore>>,
     last_visible: bool,
+    startup_hidden_ticks: usize,
 }
 
 impl WindowApp {
     fn update_ui(&mut self, ctx: &egui::Context) {
         let mut core = self.core.borrow_mut();
         core.poll_events();
+
+        if self.startup_hidden_ticks > 0 {
+            self.startup_hidden_ticks -= 1;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.request_repaint();
+        }
 
         if ctx.input(|i| i.viewport().close_requested()) {
             if core.tray_icon.is_none() {
@@ -494,7 +534,7 @@ impl WindowApp {
         }
 
         if !core.window_visible {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            ctx.request_repaint_after(Duration::from_millis(80));
             return;
         }
 
@@ -520,6 +560,12 @@ impl WindowApp {
 
                 ui.separator();
 
+                let mut start_minimized = core.start_minimized;
+                if ui.checkbox(&mut start_minimized, "Start minimized").changed() {
+                    core.start_minimized = start_minimized;
+                    core.save_settings();
+                }
+
                 let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
                 if ui.checkbox(&mut verbose, "Verbose").changed() {
                     core.logger.verbose.store(verbose, Ordering::Relaxed);
@@ -531,6 +577,7 @@ impl WindowApp {
                     } else {
                         "Verbose is OFF"
                     });
+                    core.save_settings();
                 }
 
                 let mut paused = core.logger.paused.load(Ordering::Relaxed);
@@ -540,10 +587,16 @@ impl WindowApp {
                         ids.toggle_pause.set_checked(paused);
                     }
                     core.update_tray_icon();
+                    core.save_settings();
                 }
 
-                ui.checkbox(&mut core.only_errors, "Errors Only");
-                ui.checkbox(&mut core.auto_scroll, "Auto-scroll");
+                if ui.checkbox(&mut core.only_errors, "Errors Only").changed() {
+                    core.save_settings();
+                }
+
+                if ui.checkbox(&mut core.auto_scroll, "Auto-scroll").changed() {
+                    core.save_settings();
+                }
 
                 if ui.button("🗑 Clear").clicked() {
                     core.logger.clear();
@@ -679,6 +732,7 @@ fn main() -> eframe::Result<()> {
     let mut app = WindowApp {
         core: core_clone,
         last_visible: initial_visible,
+        startup_hidden_ticks: if initial_visible { 0 } else { 2 },
     };
 
     eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {

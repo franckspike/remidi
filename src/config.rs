@@ -110,6 +110,55 @@ pub fn ensure_user_config_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub start_minimized: bool,
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub pause_all: bool,
+    #[serde(default)]
+    pub only_errors: bool,
+    #[serde(default = "default_auto_scroll")]
+    pub auto_scroll: bool,
+}
+
+fn default_auto_scroll() -> bool {
+    true
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            start_minimized: false,
+            verbose: false,
+            pause_all: false,
+            only_errors: false,
+            auto_scroll: true,
+        }
+    }
+}
+
+impl AppSettings {
+    pub fn load_from_file(path: &Path) -> Self {
+        if let Ok(content) = fs::read_to_string(path) {
+            toml::from_str(&content).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    pub fn save_to_file(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+}
+
 impl Config {
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)
@@ -197,5 +246,30 @@ mod tests {
         assert_eq!(cfg.pipelines[0].rules[0].debounce_ms, 500);
         assert!(!cfg.pipelines[1].enabled);
         assert!(cfg.pipelines[1].rules[0].dec_second_byte);
+    }
+
+    #[test]
+    fn test_app_settings_default_and_roundtrip() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.start_minimized);
+        assert!(!defaults.verbose);
+        assert!(!defaults.pause_all);
+        assert!(!defaults.only_errors);
+        assert!(defaults.auto_scroll);
+
+        let toml_str = toml::to_string_pretty(&defaults).unwrap();
+        let parsed: AppSettings = toml::from_str(&toml_str).unwrap();
+        assert_eq!(defaults, parsed);
+
+        let custom = AppSettings {
+            start_minimized: true,
+            verbose: true,
+            pause_all: true,
+            only_errors: true,
+            auto_scroll: false,
+        };
+        let custom_toml = toml::to_string_pretty(&custom).unwrap();
+        let custom_parsed: AppSettings = toml::from_str(&custom_toml).unwrap();
+        assert_eq!(custom, custom_parsed);
     }
 }
