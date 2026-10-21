@@ -479,7 +479,6 @@ fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
 
 struct WindowApp {
     core: std::rc::Rc<std::cell::RefCell<ReMidiCore>>,
-    last_visible: bool,
 }
 
 impl WindowApp {
@@ -487,23 +486,9 @@ impl WindowApp {
         let mut core = self.core.borrow_mut();
         core.poll_events();
 
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if ctx.input(|i| i.viewport().close_requested()) || !core.window_visible {
             core.window_visible = false;
-            self.last_visible = false;
-        }
-
-        if core.window_visible != self.last_visible {
-            self.last_visible = core.window_visible;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(core.window_visible));
-            if core.window_visible {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-        }
-
-        if !core.window_visible {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
 
@@ -638,23 +623,43 @@ fn main() -> eframe::Result<()> {
         config_path,
     )));
 
-    let viewport = egui::ViewportBuilder::default()
-        .with_title("ReMIDI — Log & Error Monitor")
-        .with_inner_size([760.0, 440.0])
-        .with_min_inner_size([480.0, 260.0]);
+    loop {
+        let show_window = {
+            let mut c = core.borrow_mut();
+            c.poll_events();
+            c.window_visible
+        };
 
-    let options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
+        if show_window {
+            let viewport = egui::ViewportBuilder::default()
+                .with_title("ReMIDI — Log & Error Monitor")
+                .with_inner_size([760.0, 440.0])
+                .with_min_inner_size([480.0, 260.0]);
 
-    let core_clone = core.clone();
-    let mut app = WindowApp {
-        core: core_clone,
-        last_visible: true,
-    };
+            let options = eframe::NativeOptions {
+                viewport,
+                run_and_return: true,
+                ..Default::default()
+            };
 
-    eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {
-        app.update_ui(ctx);
-    })
+            let core_clone = core.clone();
+            let _ = eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {
+                let mut app = WindowApp {
+                    core: core_clone.clone(),
+                };
+                app.update_ui(ctx);
+            });
+
+            let mut c = core.borrow_mut();
+            c.window_visible = false;
+            if c.tray_icon.is_none() {
+                c.engine.stop_all();
+                break;
+            }
+        } else {
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    Ok(())
 }
