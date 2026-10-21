@@ -360,9 +360,9 @@ impl PipelineRuntimeState {
                     ));
                 }
             }
-            Ok(RuleOutcome::FilteredByDelay { .. }) => {
+            Ok(RuleOutcome::FilteredByDebounce { .. }) => {
                 self.logger.verbose(format!(
-                    "[{}] {}: {} (filtered out by minimum delay)",
+                    "[{}] {}: {} (filtered out by debounce)",
                     self.pipeline_id, self.full_virtual_port_name, in_hex
                 ));
             }

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 pub struct CompiledRule {
     pub regex: Regex,
     pub replace: String,
-    pub min_delay: Duration,
+    pub debounce: Duration,
     pub dec_second_byte: bool,
     pub comment: Option<String>,
     pub last_triggered: Option<Instant>,
@@ -20,7 +20,7 @@ pub enum RuleOutcome {
         rule_index: usize,
         comment: Option<String>,
     },
-    FilteredByDelay {
+    FilteredByDebounce {
         rule_index: usize,
         comment: Option<String>,
     },
@@ -39,7 +39,7 @@ impl CompiledRule {
         Ok(Self {
             regex,
             replace: cfg.replace.clone(),
-            min_delay: Duration::from_millis(cfg.min_delay_ms),
+            debounce: Duration::from_millis(cfg.debounce_ms),
             dec_second_byte: cfg.dec_second_byte,
             comment: cfg.comment.clone(),
             last_triggered: None,
@@ -103,11 +103,11 @@ pub fn process_midi_bytes(
     let input_hex = format_midi_hex(input_bytes);
     for (idx, rule) in rules.iter_mut().enumerate() {
         if rule.regex.is_match(&input_hex) {
-            if !rule.min_delay.is_zero()
+            if !rule.debounce.is_zero()
                 && let Some(last) = rule.last_triggered
-                && now.saturating_duration_since(last) < rule.min_delay
+                && now.saturating_duration_since(last) < rule.debounce
             {
-                return Ok(RuleOutcome::FilteredByDelay {
+                return Ok(RuleOutcome::FilteredByDebounce {
                     rule_index: idx,
                     comment: rule.comment.clone(),
                 });
@@ -136,7 +136,7 @@ mod tests {
             CompiledRule::compile(&RuleConfig {
                 match_pattern: r"C0 (\w\w)".to_string(),
                 replace: "90 $1 7F".to_string(),
-                min_delay_ms: 500,
+                debounce_ms: 500,
                 dec_second_byte: false,
                 comment: Some("PC -> Note On".to_string()),
             })
@@ -144,7 +144,7 @@ mod tests {
             CompiledRule::compile(&RuleConfig {
                 match_pattern: r"90 01 \w\w".to_string(),
                 replace: "B0 50 00".to_string(),
-                min_delay_ms: 0,
+                debounce_ms: 0,
                 dec_second_byte: false,
                 comment: Some("Tap Tempo".to_string()),
             })
@@ -162,11 +162,11 @@ mod tests {
             }
         );
 
-        // Within 500ms -> filtered by delay
+        // Within 500ms -> filtered by debounce
         let res2 = process_midi_bytes(&mut rules, &[0xC0, 0x05], t0 + Duration::from_millis(200)).unwrap();
         assert_eq!(
             res2,
-            RuleOutcome::FilteredByDelay {
+            RuleOutcome::FilteredByDebounce {
                 rule_index: 0,
                 comment: Some("PC -> Note On".to_string()),
             }
@@ -190,7 +190,7 @@ mod tests {
             CompiledRule::compile(&RuleConfig {
                 match_pattern: r"C0 (\w\w)".to_string(),
                 replace: "C1 $1".to_string(),
-                min_delay_ms: 0,
+                debounce_ms: 0,
                 dec_second_byte: true,
                 comment: None,
             })

@@ -27,7 +27,7 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
   - Incoming MIDI bytes are formatted as uppercase hex (`"C0 01"`, `"90 3C 7F"`).
   - Match patterns use standard regular expressions with capture groups (`$1`, `$2`, etc.).
 - **Debouncing & Byte Adjustments:**
-  - `min_delay_ms`: Filters out rapid duplicate/repeat triggers within the specified millisecond window.
+  - `debounce_ms`: Filters out rapid duplicate/repeat triggers within the specified millisecond window.
   - `dec_second_byte`: Optionally decrements the second MIDI byte by 1 (e.g., converting 1-based Program Changes `01..80` to 0-based `00..7F`).
 - **System Tray + Popup Log & Error Monitor:**
   - Runs quietly in the system tray with a 5-pin DIN MIDI icon (Green = active, Amber = paused, Red = error).
@@ -50,14 +50,14 @@ test = ["C0 01", "sleep 1000", "C0 04"]
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
   replace = "90 $1 7F"
-  min_delay_ms = 500
+  debounce_ms = 500
   dec_second_byte = false
   comment = "Program Change -> Note On | Scene Change"
 
   [[pipelines.rules]]
   match = '90 01 \w\w'
   replace = "B0 50 00"
-  min_delay_ms = 0
+  debounce_ms = 0
   comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
 ```
 

@@ -51,14 +51,14 @@ test = ["C0 01", "sleep 1000", "C0 04"]
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
   replace = "90 $1 7F"
-  min_delay_ms = 500
+  debounce_ms = 500
   dec_second_byte = false
   comment = "Program Change -> Note On | Scene Change"
 
   [[pipelines.rules]]
   match = '90 01 \w\w'
   replace = "B0 50 00"
-  min_delay_ms = 0
+  debounce_ms = 0
   comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
 
 # -----------------------------------------------------------------------------
@@ -75,6 +75,6 @@ test = ["C0 01", "sleep 1000", "C0 04"]
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
   replace = "C1 $1"
-  min_delay_ms = 500
+  debounce_ms = 500
   dec_second_byte = true
   comment = "Program Change (ch1) -> Program Change (ch2) | G-Major"
