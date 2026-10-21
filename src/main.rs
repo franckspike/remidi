@@ -628,23 +628,29 @@ impl WindowApp {
 
 fn main() -> eframe::Result<()> {
     #[cfg(target_os = "linux")]
-    {
+    let use_x11 = {
         // On Linux under Wayland, winit's Wayland backend cannot hide/unmap windows
-        // (set_visible is a no-op in winit on Wayland).
-        // Using X11/XWayland enables full window hide-to-tray and show-from-tray.
-        if std::env::var("WINIT_UNIX_BACKEND").is_err()
-            && (std::env::var("DISPLAY").is_ok()
-                || std::path::Path::new("/tmp/.X11-unix/X0").exists()
-                || std::path::Path::new("/tmp/.X11-unix/X1").exists())
-        {
+        // (set_visible is an intentional no-op in winit on Wayland).
+        // By forcing X11/XWayland when an X display/socket is available, the window
+        // can be cleanly unmapped (hidden to tray) and re-mapped (shown from tray).
+        // Note: WINIT_UNIX_BACKEND was removed in winit 0.29; we unset WAYLAND_DISPLAY
+        // and WAYLAND_SOCKET, set GDK_BACKEND=x11, and call builder.with_x11().
+        let has_x11 = std::env::var("DISPLAY").map(|s| !s.is_empty()).unwrap_or(false)
+            || std::path::Path::new("/tmp/.X11-unix/X0").exists()
+            || std::path::Path::new("/tmp/.X11-unix/X1").exists();
+
+        if has_x11 {
             unsafe {
-                std::env::set_var("WINIT_UNIX_BACKEND", "x11");
                 if std::env::var("DISPLAY").map(|s| s.is_empty()).unwrap_or(true) {
                     std::env::set_var("DISPLAY", ":0");
                 }
+                std::env::set_var("GDK_BACKEND", "x11");
+                std::env::remove_var("WAYLAND_DISPLAY");
+                std::env::remove_var("WAYLAND_SOCKET");
             }
         }
-    }
+        has_x11
+    };
 
     let args: Vec<String> = env::args().collect();
     let config_path = if args.len() > 1 {
@@ -669,8 +675,21 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([480.0, 260.0])
         .with_visible(initial_visible);
 
+    #[cfg(target_os = "linux")]
+    let event_loop_builder: Option<eframe::EventLoopBuilderHook> = if use_x11 {
+        Some(Box::new(|builder| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            builder.with_x11();
+        }))
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let event_loop_builder = None;
+
     let options = eframe::NativeOptions {
         viewport,
+        event_loop_builder,
         ..Default::default()
     };
 

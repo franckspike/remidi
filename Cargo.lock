@@ -3109,6 +3109,7 @@ dependencies = [
  "toml_edit 0.20.2",
  "tray-icon",
  "windows-sys 0.59.0",
+ "winit",
 ]
 
 [[package]]
