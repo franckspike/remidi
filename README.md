@@ -12,7 +12,7 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
   - Stored automatically in your OS user configuration folder:
     - **Linux:** `~/.config/remidi/config.toml`
     - **Windows:** `%APPDATA%\remidi\config.toml`
-  - Auto-created from the built-in template ([`config.example.toml`](config.example.toml)) on first run.
+  - Auto-created from the built-in template ([`config.default.toml`](config.default.toml)) on first run.
 - **Multiple MIDI Pipelines in One Instance:**
   - Define as many `[[pipelines]]` as you need in `config.toml`.
   - Virtual ports are named `"ReMIDI - <virtual_port>"` on Windows, and `"<virtual_port>"` on Linux (under the `"ReMIDI"` ALSA client).
@@ -37,7 +37,7 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
 
 ## Configuration Format (`config.toml`)
 
-See [`config.example.toml`](config.example.toml) for a fully commented example configuration:
+See [`config.default.toml`](config.default.toml) for a fully commented example configuration:
 
 ```toml
 [[pipelines]]

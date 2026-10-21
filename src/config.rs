@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Document, value};
 
-pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
+pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.default.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn test_parse_default_template_and_test_steps() {
-        let cfg = Config::parse_str(DEFAULT_CONFIG_TEMPLATE, Path::new("config.example.toml"))
-            .expect("Failed to parse config.example.toml");
+        let cfg = Config::parse_str(DEFAULT_CONFIG_TEMPLATE, Path::new("config.default.toml"))
+            .expect("Failed to parse config.default.toml");
         assert_eq!(cfg.pipelines.len(), 2);
         assert_eq!(cfg.pipelines[0].id, "Scene Change & Tap Tempo");
         assert!(cfg.pipelines[0].enabled);
