@@ -479,6 +479,7 @@ fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
 
 struct WindowApp {
     core: std::rc::Rc<std::cell::RefCell<ReMidiCore>>,
+    last_visible: bool,
 }
 
 impl WindowApp {
@@ -486,9 +487,26 @@ impl WindowApp {
         let mut core = self.core.borrow_mut();
         core.poll_events();
 
-        if ctx.input(|i| i.viewport().close_requested()) || !core.window_visible {
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if core.tray_icon.is_none() {
+                core.engine.stop_all();
+                std::process::exit(0);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             core.window_visible = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.last_visible = false;
+        }
+
+        if core.window_visible != self.last_visible {
+            self.last_visible = core.window_visible;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(core.window_visible));
+            if core.window_visible {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+
+        if !core.window_visible {
+            ctx.request_repaint_after(Duration::from_millis(50));
             return;
         }
 
@@ -608,6 +626,25 @@ impl WindowApp {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux under Wayland, winit's Wayland backend cannot hide/unmap windows
+        // (set_visible is a no-op in winit on Wayland).
+        // Using X11/XWayland enables full window hide-to-tray and show-from-tray.
+        if std::env::var("WINIT_UNIX_BACKEND").is_err()
+            && (std::env::var("DISPLAY").is_ok()
+                || std::path::Path::new("/tmp/.X11-unix/X0").exists()
+                || std::path::Path::new("/tmp/.X11-unix/X1").exists())
+        {
+            unsafe {
+                std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+                if std::env::var("DISPLAY").map(|s| s.is_empty()).unwrap_or(true) {
+                    std::env::set_var("DISPLAY", ":0");
+                }
+            }
+        }
+    }
+
     let args: Vec<String> = env::args().collect();
     let config_path = if args.len() > 1 {
         PathBuf::from(&args[1])
@@ -623,43 +660,26 @@ fn main() -> eframe::Result<()> {
         config_path,
     )));
 
-    loop {
-        let show_window = {
-            let mut c = core.borrow_mut();
-            c.poll_events();
-            c.window_visible
-        };
+    let initial_visible = core.borrow().window_visible;
 
-        if show_window {
-            let viewport = egui::ViewportBuilder::default()
-                .with_title("ReMIDI — Log & Error Monitor")
-                .with_inner_size([760.0, 440.0])
-                .with_min_inner_size([480.0, 260.0]);
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("ReMIDI — Log & Error Monitor")
+        .with_inner_size([760.0, 440.0])
+        .with_min_inner_size([480.0, 260.0])
+        .with_visible(initial_visible);
 
-            let options = eframe::NativeOptions {
-                viewport,
-                run_and_return: true,
-                ..Default::default()
-            };
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
 
-            let core_clone = core.clone();
-            let _ = eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {
-                let mut app = WindowApp {
-                    core: core_clone.clone(),
-                };
-                app.update_ui(ctx);
-            });
+    let core_clone = core.clone();
+    let mut app = WindowApp {
+        core: core_clone,
+        last_visible: initial_visible,
+    };
 
-            let mut c = core.borrow_mut();
-            c.window_visible = false;
-            if c.tray_icon.is_none() {
-                c.engine.stop_all();
-                break;
-            }
-        } else {
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    Ok(())
+    eframe::run_simple_native("ReMIDI", options, move |ctx, _frame| {
+        app.update_ui(ctx);
+    })
 }
