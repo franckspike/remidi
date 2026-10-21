@@ -103,15 +103,14 @@ pub fn process_midi_bytes(
     let input_hex = format_midi_hex(input_bytes);
     for (idx, rule) in rules.iter_mut().enumerate() {
         if rule.regex.is_match(&input_hex) {
-            if !rule.min_delay.is_zero() {
-                if let Some(last) = rule.last_triggered {
-                    if now.saturating_duration_since(last) < rule.min_delay {
-                        return Ok(RuleOutcome::FilteredByDelay {
-                            rule_index: idx,
-                            comment: rule.comment.clone(),
-                        });
-                    }
-                }
+            if !rule.min_delay.is_zero()
+                && let Some(last) = rule.last_triggered
+                && now.saturating_duration_since(last) < rule.min_delay
+            {
+                return Ok(RuleOutcome::FilteredByDelay {
+                    rule_index: idx,
+                    comment: rule.comment.clone(),
+                });
             }
             rule.last_triggered = Some(now);
             let normalized_rep = normalize_replacement_syntax(&rule.replace);

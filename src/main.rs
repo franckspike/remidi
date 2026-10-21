@@ -50,10 +50,9 @@ fn find_linux_terminal() -> Option<&'static str> {
             .arg("-c")
             .arg(format!("command -v {} >/dev/null 2>&1", term))
             .status()
+            && status.success()
         {
-            if status.success() {
-                return Some(term);
-            }
+            return Some(term);
         }
     }
     None
@@ -80,9 +79,10 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
     let extra_args = &parts[1..];
 
     #[cfg(target_os = "linux")]
-    if is_tui_editor(bin) {
-        if let Some(term) = find_linux_terminal() {
-            logger.info(format!(
+    if is_tui_editor(bin)
+        && let Some(term) = find_linux_terminal()
+    {
+        logger.info(format!(
                 "Opening '{}' with '{}' (in {})...",
                 path.display(),
                 editor,
@@ -113,7 +113,6 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
             }
             return Ok(());
         }
-    }
 
     logger.info(format!("Opening '{}' with '{}'...", path.display(), editor));
     let mut cmd = Command::new(bin);

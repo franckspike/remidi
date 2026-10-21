@@ -535,19 +535,18 @@ impl MidiEngine {
     }
 
     pub fn set_pipeline_target_port(&mut self, pipeline_idx: usize, new_target: String) {
-        if let Some(cfg) = &mut self.current_config {
-            if let Some(p) = cfg.pipelines.get_mut(pipeline_idx) {
-                p.target_port = new_target.clone();
-            }
+        if let Some(cfg) = &mut self.current_config
+            && let Some(p) = cfg.pipelines.get_mut(pipeline_idx)
+        {
+            p.target_port = new_target.clone();
         }
         if let Some(active) = self
             .active_pipelines
             .iter()
             .find(|a| a.pipeline_index == pipeline_idx)
+            && let Ok(mut guard) = active.state.lock()
         {
-            if let Ok(mut guard) = active.state.lock() {
-                guard.set_target_port(new_target);
-            }
+            guard.set_target_port(new_target);
         }
     }
 

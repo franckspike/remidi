@@ -138,16 +138,16 @@ impl AlsaClient {
                     matched = Some((p.addr(), full_name));
                     break;
                 }
-                if full_name.contains(target_port_name) || pname.contains(target_port_name) {
-                    if matched.is_none() {
-                        matched = Some((p.addr(), full_name));
-                    }
+                if (full_name.contains(target_port_name) || pname.contains(target_port_name))
+                    && matched.is_none()
+                {
+                    matched = Some((p.addr(), full_name));
                 }
             }
-            if let Some((_, ref name)) = matched {
-                if name == target_port_name {
-                    break;
-                }
+            if let Some((_, ref name)) = matched
+                && name == target_port_name
+            {
+                break;
             }
         }
 
@@ -231,10 +231,10 @@ impl AlsaClient {
             if c.get_client() == ignore_client {
                 continue;
             }
-            if let Ok(cname) = c.get_name() {
-                if cname == "ReMIDI" {
-                    continue;
-                }
+            if let Ok(cname) = c.get_name()
+                && cname == "ReMIDI"
+            {
+                continue;
             }
             for p in PortIter::new(seq, c.get_client()) {
                 let ptype = p.get_type();
@@ -414,10 +414,10 @@ fn run_alsa_event_loop(
                     }
                 }
                 _ => {
-                    if let Ok(nbytes) = decoder.decode(&mut buffer, &mut ev) {
-                        if nbytes > 0 {
-                            message.extend_from_slice(&buffer[..nbytes]);
-                        }
+                    if let Ok(nbytes) = decoder.decode(&mut buffer, &mut ev)
+                        && nbytes > 0
+                    {
+                        message.extend_from_slice(&buffer[..nbytes]);
                     }
                 }
             }
