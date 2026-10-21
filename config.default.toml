@@ -27,6 +27,7 @@
 #
 # EXPRESSIONS & TEMPLATES (replace & comment):
 #   - Capture references: $1, $2 or ${1}, ${2}
+#   - Named captures:     (?<ch>[0-9A-Fa-f]) -> ${ch}
 #   - Arithmetic:         ${$1 - 1}, ${$1 + 1} (evaluates offset on capture byte)
 #   - Formatting:         ${$1:dec} (decimal), ${$1:hex} (hex byte), ${$1:ch} (channel 1..16)
 #   - In comment:         ${out.1}, ${out.2}, ${out.2:dec} (final output bytes)
@@ -49,34 +50,34 @@
 # Creates virtual port: "ReMIDI - Main" (Windows) / "Main" (Linux)
 # -----------------------------------------------------------------------------
 [[pipelines]]
-id = "Scene Change & Tap Tempo"
+id = "Soleman"
 enabled = true
 virtual_port = "Main"
-target_port = "01. Ethernet MIDI"
+target_port = "AIR 192 8:AIR 192 8 MIDI 1 16:0"
 test = ["C0 01", "sleep 1000", "C0 04"]
 
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
-  replace = "90 $1 7F"
+  replace = "90 ${$1 - 1} 7F"
   debounce_ms = 500
   dec_second_byte = false
-  comment = "Program Change $1 -> Note On ${out.2:dec} | Scene Change"
+  comment = "Program Change $1 -> Note On ${out.2} (${out.2:dec}) | Scene Change"
 
   [[pipelines.rules]]
   match = '90 01 \w\w'
   replace = "B0 50 00"
   debounce_ms = 0
-  comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
+  comment = "Note On x01 -> Control Change ${out.2:dec} | Tap Tempo"
 
 # -----------------------------------------------------------------------------
 # Pipeline 2: Channel 1 -> Channel 2 Program Change (1-based to 0-based)
-# Shares virtual port "ReMIDI - Main" (Windows) / "Main" (Linux) and target_port "01. Ethernet MIDI"
+# Shares virtual port "ReMIDI - Main" (Windows) / "Main" (Linux) and target_port "AIR 192 8:AIR 192 8 MIDI 1 16:0"
 # -----------------------------------------------------------------------------
 [[pipelines]]
-id = "G-Major Direct"
+id = "G-Major"
 enabled = false
 virtual_port = "Main"
-target_port = "01. Ethernet MIDI"
+target_port = "AIR 192 8:AIR 192 8 MIDI 1 16:0"
 test = ["C0 01", "sleep 1000", "C0 04"]
 
   [[pipelines.rules]]
@@ -85,3 +86,4 @@ test = ["C0 01", "sleep 1000", "C0 04"]
   debounce_ms = 500
   dec_second_byte = false
   comment = "Program Change (ch1 $1) -> Program Change (ch2 ${out.2}) | G-Major"
+

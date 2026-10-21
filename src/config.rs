@@ -228,7 +228,7 @@ mod tests {
         let cfg = Config::parse_str(DEFAULT_CONFIG_TEMPLATE, Path::new("config.default.toml"))
             .expect("Failed to parse config.default.toml");
         assert_eq!(cfg.pipelines.len(), 2);
-        assert_eq!(cfg.pipelines[0].id, "Scene Change & Tap Tempo");
+        assert_eq!(cfg.pipelines[0].id, "Soleman");
         assert!(cfg.pipelines[0].enabled);
         assert_eq!(cfg.pipelines[0].virtual_port, "Main");
         #[cfg(target_os = "windows")]
@@ -245,6 +245,7 @@ mod tests {
         );
         assert_eq!(cfg.pipelines[0].rules[0].debounce_ms, 500);
         assert!(!cfg.pipelines[1].enabled);
+        assert_eq!(cfg.pipelines[1].id, "G-Major");
         assert_eq!(cfg.pipelines[1].rules[0].replace, "C1 ${$1 - 1}");
     }
 
