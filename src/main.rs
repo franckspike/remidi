@@ -22,6 +22,38 @@ use tray_icon::TrayIcon;
 use tray_icon::menu::MenuEvent;
 
 #[cfg(target_os = "linux")]
+static ORIGINAL_WAYLAND_DISPLAY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+#[cfg(target_os = "linux")]
+static ORIGINAL_WAYLAND_SOCKET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+#[cfg(target_os = "linux")]
+static ORIGINAL_GDK_BACKEND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn prepare_child_command(mut cmd: Command) -> Command {
+    if let Some(Some(val)) = ORIGINAL_WAYLAND_DISPLAY.get() {
+        cmd.env("WAYLAND_DISPLAY", val);
+    } else {
+        cmd.env_remove("WAYLAND_DISPLAY");
+    }
+    if let Some(Some(val)) = ORIGINAL_WAYLAND_SOCKET.get() {
+        cmd.env("WAYLAND_SOCKET", val);
+    } else {
+        cmd.env_remove("WAYLAND_SOCKET");
+    }
+    if let Some(Some(val)) = ORIGINAL_GDK_BACKEND.get() {
+        cmd.env("GDK_BACKEND", val);
+    } else {
+        cmd.env_remove("GDK_BACKEND");
+    }
+    cmd
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prepare_child_command(cmd: Command) -> Command {
+    cmd
+}
+
+#[cfg(target_os = "linux")]
 fn is_tui_editor(bin: &str) -> bool {
     let name = Path::new(bin)
         .file_name()
@@ -46,7 +78,7 @@ fn find_linux_terminal() -> Option<&'static str> {
         "xterm",
     ];
     for &term in TERMINALS {
-        if let Ok(status) = Command::new("sh")
+        if let Ok(status) = prepare_child_command(Command::new("sh"))
             .arg("-c")
             .arg(format!("command -v {} >/dev/null 2>&1", term))
             .status()
@@ -83,39 +115,42 @@ fn spawn_editor_and_wait(path: &Path, logger: &SharedLogger) -> anyhow::Result<(
         && let Some(term) = find_linux_terminal()
     {
         logger.info(format!(
-                "Opening '{}' with '{}' (in {})...",
-                path.display(),
-                editor,
-                term
-            ));
-            let mut cmd = Command::new(term);
-            match term {
-                "gnome-terminal" => {
-                    cmd.arg("--wait").arg("--").arg(bin);
-                }
-                "xfce4-terminal" => {
-                    cmd.arg("--disable-server").arg("-x").arg(bin);
-                }
-                "wezterm" => {
-                    cmd.arg("start").arg("--always-new-process").arg("--").arg(bin);
-                }
-                _ => {
-                    cmd.arg("-e").arg(bin);
-                }
+            "Opening '{}' with '{}' (in {})...",
+            path.display(),
+            editor,
+            term
+        ));
+        let mut cmd = prepare_child_command(Command::new(term));
+        match term {
+            "gnome-terminal" => {
+                cmd.arg("--wait").arg("--").arg(bin);
             }
-            for a in extra_args {
-                cmd.arg(a);
+            "xfce4-terminal" => {
+                cmd.arg("--disable-server").arg("-x").arg(bin);
             }
-            cmd.arg(path);
-            let status = cmd.status()?;
-            if !status.success() {
-                anyhow::bail!("Editor exited with status {}", status);
+            "wezterm" => {
+                cmd.arg("start").arg("--always-new-process").arg("--").arg(bin);
             }
-            return Ok(());
+            "kitty" => {
+                cmd.arg("--").arg(bin);
+            }
+            _ => {
+                cmd.arg("-e").arg(bin);
+            }
         }
+        for a in extra_args {
+            cmd.arg(a);
+        }
+        cmd.arg(path);
+        let status = cmd.status()?;
+        if !status.success() {
+            anyhow::bail!("Editor exited with status {}", status);
+        }
+        return Ok(());
+    }
 
     logger.info(format!("Opening '{}' with '{}'...", path.display(), editor));
-    let mut cmd = Command::new(bin);
+    let mut cmd = prepare_child_command(Command::new(bin));
     for a in extra_args {
         cmd.arg(a);
     }
@@ -629,6 +664,10 @@ impl WindowApp {
 fn main() -> eframe::Result<()> {
     #[cfg(target_os = "linux")]
     let use_x11 = {
+        ORIGINAL_WAYLAND_DISPLAY.get_or_init(|| std::env::var("WAYLAND_DISPLAY").ok());
+        ORIGINAL_WAYLAND_SOCKET.get_or_init(|| std::env::var("WAYLAND_SOCKET").ok());
+        ORIGINAL_GDK_BACKEND.get_or_init(|| std::env::var("GDK_BACKEND").ok());
+
         // On Linux under Wayland, winit's Wayland backend cannot hide/unmap windows
         // (set_visible is an intentional no-op in winit on Wayland).
         // By forcing X11/XWayland when an X display/socket is available, the window
