@@ -7,7 +7,8 @@
 #   - Windows: %APPDATA%\remidi\config.toml
 #
 # ReMIDI supports multiple MIDI pipelines in a single instance:
-#   - Virtual ports are automatically named "ReMIDI [<virtual_port>]".
+#   - Virtual ports are named "ReMIDI - <virtual_port>" on Windows,
+#     and "<virtual_port>" on Linux (under the "ReMIDI" unified ALSA client).
 #   - Multiple pipelines can share the same `virtual_port` (incoming messages
 #     on that virtual port are dispatched to all enabled pipelines using it).
 #   - Multiple pipelines can write to the same `target_port` (outgoing MIDI
@@ -38,7 +39,7 @@
 
 # -----------------------------------------------------------------------------
 # Pipeline 1: Program Change -> Note On (Scene Change) & Note On -> Tap Tempo
-# Creates virtual port: "ReMIDI [Main]"
+# Creates virtual port: "ReMIDI - Main" (Windows) / "Main" (Linux)
 # -----------------------------------------------------------------------------
 [[pipelines]]
 id = "Scene Change & Tap Tempo"
@@ -62,7 +63,7 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 
 # -----------------------------------------------------------------------------
 # Pipeline 2: Channel 1 -> Channel 2 Program Change (1-based to 0-based)
-# Shares virtual port "ReMIDI [Main]" and target_port "01. Ethernet MIDI"
+# Shares virtual port "ReMIDI - Main" (Windows) / "Main" (Linux) and target_port "01. Ethernet MIDI"
 # -----------------------------------------------------------------------------
 [[pipelines]]
 id = "G-Major Direct"

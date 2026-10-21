@@ -445,12 +445,12 @@ mod tests {
 
         let subs1: SubscribersList = Arc::new(Mutex::new(Vec::new()));
         let vport1 = client
-            .create_virtual_port("ReMIDI [Main]", subs1)
+            .create_virtual_port("Main", subs1)
             .expect("Failed to create virtual port 1");
 
         let subs2: SubscribersList = Arc::new(Mutex::new(Vec::new()));
         let vport2 = client
-            .create_virtual_port("ReMIDI [Pedals]", subs2)
+            .create_virtual_port("Pedals", subs2)
             .expect("Failed to create virtual port 2");
 
         assert_eq!(vport1.client.client_id, client_id);

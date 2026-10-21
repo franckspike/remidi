@@ -15,7 +15,7 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
   - Auto-created from the built-in template ([`config.example.toml`](config.example.toml)) on first run.
 - **Multiple MIDI Pipelines in One Instance:**
   - Define as many `[[pipelines]]` as you need in `config.toml`.
-  - Virtual ports are automatically named `"ReMIDI [<virtual_port>]"`.
+  - Virtual ports are named `"ReMIDI - <virtual_port>"` on Windows, and `"<virtual_port>"` on Linux (under the `"ReMIDI"` ALSA client).
   - Multiple pipelines can **share the same `virtual_port`** (incoming messages on that virtual port are dispatched to all enabled pipelines listening on it).
   - Multiple pipelines can **write to the same `target_port`** (shared MIDI-out connection with mutex-synchronized packet transmission).
   - Enable/disable individual pipelines, switch their output `target_port` from a live list of connected MIDI-out ports, or run their `test` sequence directly from the System Tray menu.

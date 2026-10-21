@@ -40,7 +40,14 @@ fn default_virtual_port() -> String {
 
 impl PipelineConfig {
     pub fn full_virtual_port_name(&self) -> String {
-        format!("ReMIDI [{}]", self.virtual_port)
+        #[cfg(target_os = "windows")]
+        {
+            format!("ReMIDI - {}", self.virtual_port)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.virtual_port.clone()
+        }
     }
 }
 
@@ -175,7 +182,10 @@ mod tests {
         assert_eq!(cfg.pipelines[0].id, "Scene Change & Tap Tempo");
         assert!(cfg.pipelines[0].enabled);
         assert_eq!(cfg.pipelines[0].virtual_port, "Main");
-        assert_eq!(cfg.pipelines[0].full_virtual_port_name(), "ReMIDI [Main]");
+        #[cfg(target_os = "windows")]
+        assert_eq!(cfg.pipelines[0].full_virtual_port_name(), "ReMIDI - Main");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(cfg.pipelines[0].full_virtual_port_name(), "Main");
         assert_eq!(
             cfg.pipelines[0].parse_test_steps().unwrap(),
             vec![
