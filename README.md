@@ -24,12 +24,18 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
 - **Cross-Platform Virtual MIDI Loopback:**
   - **Linux:** Creates native ALSA/JACK virtual MIDI ports out of the box (no external drivers required).
   - **Windows:** Dynamically uses `teVirtualMIDI64.dll` (`teVirtualMIDISDK`, same driver used by `loopMIDI` and `rtpMIDI`) to create on-the-fly virtual MIDI ports.
-- **Regex Hex Matching & Replacement:**
+- **Regex Hex Matching & Expressions:**
   - Incoming MIDI bytes are formatted as uppercase hex (`"C0 01"`, `"90 3C 7F"`).
-  - Match patterns use standard regular expressions with capture groups (`$1`, `$2`, etc.).
+  - Match patterns use standard regular expressions with capture groups (`$1`, `$2`, named groups `(?<ch>[0-9A-Fa-f])`).
+  - `replace` and `comment` support powerful expression templates:
+    - Capture interpolation: `$1`, `${1}`, `${ch}`
+    - Byte arithmetic: `${$1 - 1}`, `${$1 + 1}`, `${$ch + 1}` (wrap around 0..255)
+    - Output byte references in `comment`: `${out.1}`, `${out.2}`, `${out.2:dec}`
+    - Input byte references in `comment`: `${in.1}`, `${in.2}`
+    - Format modifiers: `:hex` (2-digit uppercase hex), `:dec` (decimal), `:ch` (1-based MIDI channel 1..16)
 - **Debouncing & Byte Adjustments:**
   - `debounce_ms`: Filters out rapid duplicate/repeat triggers within the specified millisecond window.
-  - `dec_second_byte`: Optionally decrements the second MIDI byte by 1 (e.g., converting 1-based Program Changes `01..80` to 0-based `00..7F`).
+  - `dec_second_byte`: Optionally decrements the second MIDI byte by 1 (e.g., converting 1-based Program Changes `01..80` to 0-based `00..7F`). Note: you can also use `${$1 - 1}` directly in `replace`.
 - **System Tray + Popup Log & Error Monitor:**
   - Runs quietly in the system tray with a 5-pin DIN MIDI icon (Green = active, Amber = paused, Red = error).
   - Automatically pops up the **Log & Error Monitor** window if an error occurs (such as a missing MIDI port or invalid rule).
@@ -50,16 +56,15 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
-  replace = "90 $1 7F"
+  replace = "90 ${$1 - 1} 7F"
   debounce_ms = 500
-  dec_second_byte = false
-  comment = "Program Change -> Note On | Scene Change"
+  comment = "Program Change $1 -> Note On ${out.2} (${out.2:dec}) | Scene Change"
 
   [[pipelines.rules]]
-  match = '90 01 \w\w'
-  replace = "B0 50 00"
+  match = '9(?<ch>[0-9A-Fa-f]) 01 \w\w'
+  replace = "B${ch} 50 00"
   debounce_ms = 0
-  comment = "Note On x01 -> Control Change 80 (dec) | Tap Tempo"
+  comment = "Ch ${ch:ch} Note On x01 -> CC 80 | Tap Tempo"
 ```
 
 ---

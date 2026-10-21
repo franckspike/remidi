@@ -245,7 +245,7 @@ mod tests {
         );
         assert_eq!(cfg.pipelines[0].rules[0].debounce_ms, 500);
         assert!(!cfg.pipelines[1].enabled);
-        assert!(cfg.pipelines[1].rules[0].dec_second_byte);
+        assert_eq!(cfg.pipelines[1].rules[0].replace, "C1 ${$1 - 1}");
     }
 
     #[test]

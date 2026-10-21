@@ -25,6 +25,13 @@
 #     2-byte message (e.g. Program Change): "C0 01"
 #     3-byte message (e.g. Note On / CC):   "90 3C 7F"
 #
+# EXPRESSIONS & TEMPLATES (replace & comment):
+#   - Capture references: $1, $2 or ${1}, ${2}
+#   - Arithmetic:         ${$1 - 1}, ${$1 + 1} (evaluates offset on capture byte)
+#   - Formatting:         ${$1:dec} (decimal), ${$1:hex} (hex byte), ${$1:ch} (channel 1..16)
+#   - In comment:         ${out.1}, ${out.2}, ${out.2:dec} (final output bytes)
+#                         ${in.1}, ${in.2}, ${in.2:dec} (original input bytes)
+#
 # UNMATCHED MESSAGES:
 #   Messages that do not match any rule in a pipeline are ignored (filtered out).
 #   If you want a pass-through fallback at the end of a pipeline's rules, add:
@@ -53,7 +60,7 @@ test = ["C0 01", "sleep 1000", "C0 04"]
   replace = "90 $1 7F"
   debounce_ms = 500
   dec_second_byte = false
-  comment = "Program Change -> Note On | Scene Change"
+  comment = "Program Change $1 -> Note On ${out.2:dec} | Scene Change"
 
   [[pipelines.rules]]
   match = '90 01 \w\w'
@@ -74,7 +81,7 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
-  replace = "C1 $1"
+  replace = "C1 ${$1 - 1}"
   debounce_ms = 500
-  dec_second_byte = true
-  comment = "Program Change (ch1) -> Program Change (ch2) | G-Major"
+  dec_second_byte = false
+  comment = "Program Change (ch1 $1) -> Program Change (ch2 ${out.2}) | G-Major"
