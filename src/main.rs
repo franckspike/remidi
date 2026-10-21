@@ -492,6 +492,7 @@ impl WindowApp {
                 core.engine.stop_all();
                 std::process::exit(0);
             }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             core.window_visible = false;
             self.last_visible = false;
