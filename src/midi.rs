@@ -1,6 +1,8 @@
 use crate::config::{Config, PipelineConfig, TestAction};
 use crate::engine::{CompiledRule, RuleOutcome, format_midi_hex, parse_midi_hex, process_midi_bytes};
+#[allow(unused_imports)]
 use anyhow::{Context, Result, anyhow};
+#[allow(unused_imports)]
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,14 +108,41 @@ impl SharedLogger {
 }
 
 pub fn list_midi_out_ports() -> Vec<String> {
-    let Ok(midi_out) = MidiOutput::new("ReMIDI-Scanner") else {
-        return Vec::new();
-    };
-    midi_out
-        .ports()
-        .iter()
-        .filter_map(|p| midi_out.port_name(p).ok())
-        .collect()
+    #[cfg(target_os = "linux")]
+    {
+        crate::alsa_backend::AlsaClient::list_available_ports()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let Ok(midi_out) = MidiOutput::new("ReMIDI-Scanner") else {
+            return Vec::new();
+        };
+        midi_out
+            .ports()
+            .iter()
+            .filter_map(|p| midi_out.port_name(p).ok())
+            .collect()
+    }
+}
+
+pub enum OutputConnection {
+    #[cfg(target_os = "linux")]
+    Alsa(crate::alsa_backend::AlsaOutputSender),
+    #[cfg(not(target_os = "linux"))]
+    Midir(MidiOutputConnection),
+}
+
+impl OutputConnection {
+    pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        match self {
+            #[cfg(target_os = "linux")]
+            OutputConnection::Alsa(sender) => sender.send(bytes),
+            #[cfg(not(target_os = "linux"))]
+            OutputConnection::Midir(conn) => {
+                conn.send(bytes).map_err(|e| anyhow!("{:#}", e))
+            }
+        }
+    }
 }
 
 /// Shared pool of open MIDI-out connections.
@@ -122,14 +151,21 @@ pub fn list_midi_out_ports() -> Vec<String> {
 /// 2. Concurrent `send(&bytes)` calls across pipelines are strictly serialized via a Mutex so MIDI packets never interleave.
 #[derive(Clone)]
 pub struct SharedOutputPool {
-    connections: Arc<Mutex<HashMap<String, Arc<Mutex<MidiOutputConnection>>>>>,
+    connections: Arc<Mutex<HashMap<String, Arc<Mutex<OutputConnection>>>>>,
+    #[cfg(target_os = "linux")]
+    alsa_client: Option<Arc<crate::alsa_backend::AlsaClient>>,
     logger: SharedLogger,
 }
 
 impl SharedOutputPool {
-    pub fn new(logger: SharedLogger) -> Self {
+    pub fn new(
+        logger: SharedLogger,
+        #[cfg(target_os = "linux")] alsa_client: Option<Arc<crate::alsa_backend::AlsaClient>>,
+    ) -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            alsa_client,
             logger,
         }
     }
@@ -141,74 +177,104 @@ impl SharedOutputPool {
     }
 
     /// Opens (or reuses an already open) MIDI-out connection for `target_port_name`.
-    pub fn ensure_open(&self, pipeline_id: &str, target_port_name: &str) -> Option<Arc<Mutex<MidiOutputConnection>>> {
+    pub fn ensure_open(
+        &self,
+        pipeline_id: &str,
+        target_port_name: &str,
+    ) -> Option<Arc<Mutex<OutputConnection>>> {
         let mut map = self.connections.lock().ok()?;
         if let Some(existing) = map.get(target_port_name) {
             return Some(existing.clone());
         }
 
-        let Ok(midi_out) = MidiOutput::new("ReMIDI-Out") else {
-            self.logger
-                .error("Error: Could not initialize MIDI output subsystem");
-            return None;
-        };
-        let ports = midi_out.ports();
-        // Match exact name first, then substring match
-        let matched_port = ports
-            .iter()
-            .find(|p| {
-                midi_out
-                    .port_name(p)
-                    .map(|n| n == target_port_name)
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                ports.iter().find(|p| {
-                    midi_out
-                        .port_name(p)
-                        .map(|n| n.contains(target_port_name))
-                        .unwrap_or(false)
-                })
-            });
-
-        let Some(port) = matched_port else {
-            self.logger.error(format!(
-                "[{}] Error: Could not find MIDI-out port named '{}'",
-                pipeline_id, target_port_name
-            ));
-            return None;
-        };
-
-        let resolved_name = midi_out
-            .port_name(port)
-            .unwrap_or_else(|_| target_port_name.to_string());
-
-        // Check if another pipeline already opened the same resolved port under a substring alias
-        if let Some(existing) = map.get(&resolved_name) {
-            let arc = existing.clone();
-            map.insert(target_port_name.to_string(), arc.clone());
-            return Some(arc);
+        #[cfg(target_os = "linux")]
+        {
+            let Some(client) = &self.alsa_client else {
+                self.logger.error("ALSA client not initialized");
+                return None;
+            };
+            match client.open_output_port(pipeline_id, target_port_name) {
+                Ok(sender) => {
+                    let resolved_name = sender.resolved_name.clone();
+                    let arc = Arc::new(Mutex::new(OutputConnection::Alsa(sender)));
+                    map.insert(target_port_name.to_string(), arc.clone());
+                    if resolved_name != target_port_name {
+                        map.insert(resolved_name, arc.clone());
+                    }
+                    Some(arc)
+                }
+                Err(e) => {
+                    self.logger.error(format!("{:#}", e));
+                    None
+                }
+            }
         }
 
-        match midi_out.connect(port, "ReMIDI-Out-Conn") {
-            Ok(conn) => {
-                self.logger.info(format!(
-                    "[{}] Opened MIDI-out port '{}' (for sending)",
-                    pipeline_id, resolved_name
-                ));
-                let arc = Arc::new(Mutex::new(conn));
-                map.insert(target_port_name.to_string(), arc.clone());
-                if resolved_name != target_port_name {
-                    map.insert(resolved_name, arc.clone());
-                }
-                Some(arc)
-            }
-            Err(e) => {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let Ok(midi_out) = MidiOutput::new("ReMIDI-Out") else {
+                self.logger
+                    .error("Error: Could not initialize MIDI output subsystem");
+                return None;
+            };
+            let ports = midi_out.ports();
+            // Match exact name first, then substring match
+            let matched_port = ports
+                .iter()
+                .find(|p| {
+                    midi_out
+                        .port_name(p)
+                        .map(|n| n == target_port_name)
+                        .unwrap_or(false)
+                })
+                .or_else(|| {
+                    ports.iter().find(|p| {
+                        midi_out
+                            .port_name(p)
+                            .map(|n| n.contains(target_port_name))
+                            .unwrap_or(false)
+                    })
+                });
+
+            let Some(port) = matched_port else {
                 self.logger.error(format!(
-                    "[{}] Error: Could not open MIDI-out port '{}': {}",
-                    pipeline_id, resolved_name, e
+                    "[{}] Error: Could not find MIDI-out port named '{}'",
+                    pipeline_id, target_port_name
                 ));
-                None
+                return None;
+            };
+
+            let resolved_name = midi_out
+                .port_name(port)
+                .unwrap_or_else(|_| target_port_name.to_string());
+
+            // Check if another pipeline already opened the same resolved port under a substring alias
+            if let Some(existing) = map.get(&resolved_name) {
+                let arc = existing.clone();
+                map.insert(target_port_name.to_string(), arc.clone());
+                return Some(arc);
+            }
+
+            match midi_out.connect(port, "ReMIDI-Out-Conn") {
+                Ok(conn) => {
+                    self.logger.info(format!(
+                        "[{}] Opened MIDI-out port '{}' (for sending)",
+                        pipeline_id, resolved_name
+                    ));
+                    let arc = Arc::new(Mutex::new(OutputConnection::Midir(conn)));
+                    map.insert(target_port_name.to_string(), arc.clone());
+                    if resolved_name != target_port_name {
+                        map.insert(resolved_name, arc.clone());
+                    }
+                    Some(arc)
+                }
+                Err(e) => {
+                    self.logger.error(format!(
+                        "[{}] Error: Could not open MIDI-out port '{}': {}",
+                        pipeline_id, resolved_name, e
+                    ));
+                    None
+                }
             }
         }
     }
@@ -225,7 +291,7 @@ impl SharedOutputPool {
 
         if let Err(e) = send_res {
             self.logger.error(format!(
-                "[{}] Error sending to MIDI-out port '{}': {}",
+                "[{}] Error sending to MIDI-out port '{}': {:#}",
                 pipeline_id, target_port_name, e
             ));
             if let Ok(mut map) = self.connections.lock() {
@@ -238,7 +304,7 @@ impl SharedOutputPool {
     }
 }
 
-struct PipelineRuntimeState {
+pub(crate) struct PipelineRuntimeState {
     pipeline_id: String,
     full_virtual_port_name: String,
     target_port_name: String,
@@ -320,10 +386,12 @@ struct SharedVirtualPort {
 }
 
 enum VirtualBackendHandle {
+    #[cfg(target_os = "linux")]
     #[allow(dead_code)]
+    Alsa(crate::alsa_backend::AlsaVirtualPortHandle),
+    #[cfg(all(unix, not(target_os = "linux")))]
     MidirInput(MidiInputConnection<()>),
     #[cfg(target_os = "windows")]
-    #[allow(dead_code)]
     TeVirtualMidi(windows_virtual::TeVirtualPortGuard),
 }
 
@@ -331,16 +399,35 @@ pub struct MidiEngine {
     active_pipelines: Vec<ActivePipelineHandle>,
     virtual_ports: HashMap<String, SharedVirtualPort>,
     output_pool: SharedOutputPool,
+    #[cfg(target_os = "linux")]
+    alsa_client: Option<Arc<crate::alsa_backend::AlsaClient>>,
     current_config: Option<Config>,
     logger: SharedLogger,
 }
 
 impl MidiEngine {
     pub fn new(logger: SharedLogger) -> Self {
+        #[cfg(target_os = "linux")]
+        let alsa_client = match crate::alsa_backend::AlsaClient::new(logger.clone()) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                logger.error(format!("Failed to initialize unified ALSA device: {:#}", e));
+                None
+            }
+        };
+
+        let output_pool = SharedOutputPool::new(
+            logger.clone(),
+            #[cfg(target_os = "linux")]
+            alsa_client.clone(),
+        );
+
         Self {
             active_pipelines: Vec::new(),
             virtual_ports: HashMap::new(),
-            output_pool: SharedOutputPool::new(logger.clone()),
+            output_pool,
+            #[cfg(target_os = "linux")]
+            alsa_client,
             current_config: None,
             logger,
         }
@@ -425,6 +512,8 @@ impl MidiEngine {
         } else {
             let subscribers = Arc::new(Mutex::new(vec![state.clone()]));
             let backend = create_virtual_backend(
+                #[cfg(target_os = "linux")]
+                self.alsa_client.as_ref().ok_or_else(|| anyhow!("ALSA client not available"))?,
                 &pipeline_cfg.id,
                 &full_virtual_port_name,
                 subscribers.clone(),
@@ -535,7 +624,7 @@ impl MidiEngine {
     }
 }
 
-fn dispatch_to_subscribers(
+pub(crate) fn dispatch_to_subscribers(
     subscribers: &Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
     message: &[u8],
 ) {
@@ -551,7 +640,23 @@ fn dispatch_to_subscribers(
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn create_virtual_backend(
+    alsa_client: &Arc<crate::alsa_backend::AlsaClient>,
+    pipeline_id: &str,
+    port_name: &str,
+    subscribers: Arc<Mutex<Vec<Arc<Mutex<PipelineRuntimeState>>>>>,
+    logger: &SharedLogger,
+) -> Result<VirtualBackendHandle> {
+    let handle = alsa_client.create_virtual_port(port_name, subscribers)?;
+    logger.info(format!(
+        "[{}] Created MIDI-out port '{}' (for receiving)",
+        pipeline_id, port_name
+    ));
+    Ok(VirtualBackendHandle::Alsa(handle))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn create_virtual_backend(
     pipeline_id: &str,
     port_name: &str,

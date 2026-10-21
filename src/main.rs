@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "linux")]
+mod alsa_backend;
 mod config;
 mod engine;
 mod midi;

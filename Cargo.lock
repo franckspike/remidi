@@ -3093,12 +3093,14 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "remidi"
 version = "0.3.0"
 dependencies = [
+ "alsa",
  "anyhow",
  "dirs",
  "eframe",
  "egui",
  "gtk",
  "image",
+ "libc",
  "libloading 0.8.9",
  "midir",
  "regex",
