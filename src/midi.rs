@@ -347,15 +347,19 @@ impl PipelineRuntimeState {
                     .output_pool
                     .send_synchronized(&self.pipeline_id, &self.target_port_name, &output_bytes)
                 {
-                    let suffix = comment
-                        .as_deref()
-                        .map(|c| format!(" [{}]", c))
-                        .unwrap_or_default();
-                    self.logger.transform(format!(
-                        "[{}] {} --> {} {}",
+                    self.logger.verbose(format!(
+                        "[{}] {} --> {}",
                         self.pipeline_id,
                         in_hex,
                         out_hex,
+                    ));
+                    let suffix = comment
+                        .as_deref()
+                        .map(|c| format!("{}", c))
+                        .unwrap_or_default();
+                    self.logger.transform(format!(
+                        "[{}] {}",
+                        self.pipeline_id,
                         suffix
                     ));
                 }
