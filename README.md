@@ -76,6 +76,27 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 - **Linux system packages:** ALSA & GTK3/AppIndicator development headers (`sudo apt install libasound2-dev libgtk-3-dev libayatana-appindicator3-dev` on Debian/Ubuntu)
 - **Windows driver:** [teVirtualMIDI](https://www.tobias-erichsen.de/software/virtualmidi.html) (installed automatically with `loopMIDI` or `rtpMIDI`) so `teVirtualMIDI64.dll` is present in `C:\Windows\System32`.
 
+### Windows Installer (`remidi-setup.exe`)
+
+For end users on Windows, standalone installers are published with each release:
+- **Installer:** Download and run `remidi-setup.exe` from [GitHub Releases](https://github.com/aliensys/remidi/releases).
+  - Installs to `C:\Program Files\ReMIDI` (64-bit).
+  - Creates Start Menu shortcuts and an optional Desktop shortcut.
+  - Includes an optional task to launch ReMIDI automatically at Windows startup (`HKCU\...\Run`).
+  - Detects if `teVirtualMIDI64.dll` is installed in `System32` and suggests downloading it if missing.
+  - Supports clean uninstallation from Windows Settings / Add & Remove Programs.
+- **Portable ZIP:** `remidi-windows-x86_64-portable.zip` is also available for portable use without administrator privileges.
+
+To build the installer locally on Windows:
+```sh
+# Requires Inno Setup 6 (https://jrsoftware.org/isinfo.php)
+just installer
+# Or manually:
+cargo build --release
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/remidi.iss
+# Output is generated at target/installer/remidi-setup.exe
+```
+
 ### Commands (Same on Windows & Linux)
 
 ```sh

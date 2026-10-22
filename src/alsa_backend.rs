@@ -1,9 +1,9 @@
 use crate::midi::{PipelineRuntimeState, SharedLogger, dispatch_to_subscribers};
+use alsa::Direction;
 use alsa::poll::Descriptors;
 use alsa::seq::{
     Addr, ClientIter, EventType, MidiEvent, PortCap, PortIter, PortSubscribe, PortType, Seq,
 };
-use alsa::Direction;
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -40,8 +40,7 @@ impl AlsaClient {
         let pipe_tx = fds[1];
 
         let seq_arc = Arc::new(Mutex::new(seq));
-        let ports: Arc<Mutex<HashMap<i32, SubscribersList>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let ports: Arc<Mutex<HashMap<i32, SubscribersList>>> = Arc::new(Mutex::new(HashMap::new()));
         let running = Arc::new(AtomicBool::new(true));
 
         let thread_seq = seq_arc.clone();
@@ -49,12 +48,7 @@ impl AlsaClient {
         let thread_running = running.clone();
 
         let thread_handle = thread::spawn(move || {
-            run_alsa_event_loop(
-                thread_seq,
-                thread_ports,
-                thread_running,
-                pipe_rx,
-            );
+            run_alsa_event_loop(thread_seq, thread_ports, thread_running, pipe_rx);
             unsafe {
                 libc::close(pipe_rx);
             }
@@ -77,8 +71,8 @@ impl AlsaClient {
         subscribers: SubscribersList,
     ) -> Result<AlsaVirtualPortHandle> {
         let seq = self.seq.lock().map_err(|_| anyhow!("Poisoned Seq mutex"))?;
-        let c_name = CString::new(port_name)
-            .map_err(|_| anyhow!("Port name contains null bytes"))?;
+        let c_name =
+            CString::new(port_name).map_err(|_| anyhow!("Port name contains null bytes"))?;
 
         let port_id = seq
             .create_simple_port(
@@ -115,9 +109,9 @@ impl AlsaClient {
             }
             for p in PortIter::new(&seq, c.get_client()) {
                 let ptype = p.get_type();
-                if !ptype.intersects(
-                    PortType::MIDI_GENERIC | PortType::SYNTH | PortType::APPLICATION,
-                ) {
+                if !ptype
+                    .intersects(PortType::MIDI_GENERIC | PortType::SYNTH | PortType::APPLICATION)
+                {
                     continue;
                 }
                 let caps = p.get_capability();
@@ -127,8 +121,7 @@ impl AlsaClient {
 
                 let cname = c.get_name().unwrap_or_default();
                 let pname = p.get_name().unwrap_or_default();
-                let full_name =
-                    format!("{}:{} {}:{}", cname, pname, p.get_client(), p.get_port());
+                let full_name = format!("{}:{} {}:{}", cname, pname, p.get_client(), p.get_port());
                 let addr_str = format!("{}:{}", p.get_client(), p.get_port());
 
                 if full_name == target_port_name
@@ -237,9 +230,9 @@ impl AlsaClient {
             }
             for p in PortIter::new(seq, c.get_client()) {
                 let ptype = p.get_type();
-                if !ptype.intersects(
-                    PortType::MIDI_GENERIC | PortType::SYNTH | PortType::APPLICATION,
-                ) {
+                if !ptype
+                    .intersects(PortType::MIDI_GENERIC | PortType::SYNTH | PortType::APPLICATION)
+                {
                     continue;
                 }
                 let caps = p.get_capability();
@@ -248,8 +241,7 @@ impl AlsaClient {
                 }
                 let cname = c.get_name().unwrap_or_default();
                 let pname = p.get_name().unwrap_or_default();
-                let formatted =
-                    format!("{}:{} {}:{}", cname, pname, p.get_client(), p.get_port());
+                let formatted = format!("{}:{} {}:{}", cname, pname, p.get_client(), p.get_port());
                 results.push(formatted);
             }
         }
@@ -380,8 +372,7 @@ fn run_alsa_event_loop(
     let mut sysex_buf = Vec::new();
 
     while running.load(Ordering::Relaxed) {
-        let ret =
-            unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, 100) };
+        let ret = unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, 100) };
 
         if ret <= 0 {
             continue;
@@ -424,7 +415,10 @@ fn run_alsa_event_loop(
                 }
 
                 if !message.is_empty() {
-                    let maybe_subs = ports_arc.lock().ok().and_then(|m| m.get(&dest_port).cloned());
+                    let maybe_subs = ports_arc
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get(&dest_port).cloned());
                     if let Some(subs) = maybe_subs {
                         pending_dispatches.push((subs, message));
                     }

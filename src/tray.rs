@@ -119,8 +119,7 @@ pub fn build_tray_menu(
         let mut found_current = false;
 
         for port_name in midi_out_ports {
-            let is_selected =
-                *port_name == p.target_port || port_name.contains(&p.target_port);
+            let is_selected = *port_name == p.target_port || port_name.contains(&p.target_port);
             if is_selected {
                 found_current = true;
             }

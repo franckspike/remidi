@@ -12,6 +12,19 @@ build:
 release:
     cargo build --release
 
+# Générer l'installateur Windows (remidi-setup.exe) avec Inno Setup
+installer: release
+    @if [ -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then \
+        "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" installer/remidi.iss; \
+    elif command -v iscc >/dev/null 2>&1; then \
+        iscc installer/remidi.iss; \
+    else \
+        echo "Erreur: Inno Setup (iscc) n'a pas été trouvé dans le PATH ni dans Program Files."; \
+        exit 1; \
+    fi
+    @echo "Installateur généré dans target/installer/remidi-setup.exe !"
+
+
 # Lancer ReMIDI en mode debug
 run *args:
     cargo run -- {{args}}

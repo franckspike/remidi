@@ -127,7 +127,10 @@ fn spawn_editor(path: &Path, logger: &SharedLogger) -> anyhow::Result<()> {
                 cmd.arg("-x").arg(bin);
             }
             "wezterm" => {
-                cmd.arg("start").arg("--always-new-process").arg("--").arg(bin);
+                cmd.arg("start")
+                    .arg("--always-new-process")
+                    .arg("--")
+                    .arg(bin);
             }
             "kitty" => {
                 cmd.arg("--").arg(bin);
@@ -193,7 +196,9 @@ fn ensure_xdg_desktop_entry_exists(logger: &SharedLogger) {
             logger.error(format!("Could not install desktop shortcut: {}", e));
         } else {
             installed_anything = true;
-            logger.info("Installed XDG desktop shortcut in ~/.local/share/applications/remidi.desktop");
+            logger.info(
+                "Installed XDG desktop shortcut in ~/.local/share/applications/remidi.desktop",
+            );
         }
     }
 
@@ -244,7 +249,10 @@ impl ReMidiCore {
         ) {
             Ok((t, ids)) => (Some(t), Some(ids)),
             Err(e) => {
-                logger.error(format!("Warning: Could not initialize system tray icon: {}", e));
+                logger.error(format!(
+                    "Warning: Could not initialize system tray icon: {}",
+                    e
+                ));
                 (None, None)
             }
         };
@@ -289,7 +297,8 @@ impl ReMidiCore {
             pause_all: self.logger.paused.load(Ordering::Relaxed),
         };
         if let Err(e) = settings.save_to_file(&self.settings_path) {
-            self.logger.error(format!("Failed to save settings: {:#}", e));
+            self.logger
+                .error(format!("Failed to save settings: {:#}", e));
         }
     }
 
@@ -299,10 +308,18 @@ impl ReMidiCore {
         }
         self.logger.set_log_level(new_level);
         if let Some(ids) = &self.tray_ids {
-            ids.log_level_items.item_error.set_checked(new_level == LogLevel::Error);
-            ids.log_level_items.item_transform.set_checked(new_level == LogLevel::Transform);
-            ids.log_level_items.item_info.set_checked(new_level == LogLevel::Info);
-            ids.log_level_items.item_verbose.set_checked(new_level == LogLevel::Verbose);
+            ids.log_level_items
+                .item_error
+                .set_checked(new_level == LogLevel::Error);
+            ids.log_level_items
+                .item_transform
+                .set_checked(new_level == LogLevel::Transform);
+            ids.log_level_items
+                .item_info
+                .set_checked(new_level == LogLevel::Info);
+            ids.log_level_items
+                .item_verbose
+                .set_checked(new_level == LogLevel::Verbose);
         }
         self.logger.info(format!("Log level set to {}", new_level));
         self.save_settings();
@@ -329,8 +346,10 @@ impl ReMidiCore {
     }
 
     fn reload_config(&mut self) {
-        self.logger
-            .info(format!("Loading config '{}'...", self.config_path.display()));
+        self.logger.info(format!(
+            "Loading config '{}'...",
+            self.config_path.display()
+        ));
         match Config::load_from_file(&self.config_path) {
             Ok(cfg) => {
                 if let Err(e) = self.engine.load_config(cfg) {
@@ -375,14 +394,13 @@ impl ReMidiCore {
     }
 
     fn select_pipeline_target_port(&mut self, pipeline_idx: usize, port_name: String) {
-        if let Err(e) = Config::save_pipeline_update(
-            &self.config_path,
-            pipeline_idx,
-            None,
-            Some(&port_name),
-        ) {
-            self.logger
-                .error(format!("Failed to save target_port to config.toml: {:#}", e));
+        if let Err(e) =
+            Config::save_pipeline_update(&self.config_path, pipeline_idx, None, Some(&port_name))
+        {
+            self.logger.error(format!(
+                "Failed to save target_port to config.toml: {:#}",
+                e
+            ));
         }
         self.engine
             .set_pipeline_target_port(pipeline_idx, port_name);
@@ -530,8 +548,7 @@ fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
 
             let mut found_current = false;
             for port_name in &core.cached_midi_ports {
-                let is_selected =
-                    *port_name == p.target_port || port_name.contains(&p.target_port);
+                let is_selected = *port_name == p.target_port || port_name.contains(&p.target_port);
                 if is_selected {
                     found_current = true;
                 }
@@ -545,10 +562,7 @@ fn render_pipelines_menu(ui: &mut egui::Ui, core: &mut ReMidiCore) {
             if !found_current && !p.target_port.is_empty() {
                 let missing_label = format!("{} (disconnected)", p.target_port);
                 let mut checked = true;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut checked, missing_label),
-                );
+                ui.add_enabled(false, egui::Checkbox::new(&mut checked, missing_label));
             }
         });
     }
@@ -628,7 +642,10 @@ impl WindowApp {
                 ui.separator();
 
                 let mut start_minimized = core.start_minimized;
-                if ui.checkbox(&mut start_minimized, "Start minimized").changed() {
+                if ui
+                    .checkbox(&mut start_minimized, "Start minimized")
+                    .changed()
+                {
                     core.start_minimized = start_minimized;
                     core.save_settings();
                 }
@@ -649,7 +666,10 @@ impl WindowApp {
                     .selected_text(current_lvl.as_str())
                     .show_ui(ui, |ui| {
                         for &lvl in &LogLevel::ALL {
-                            if ui.selectable_value(&mut current_lvl, lvl, lvl.as_str()).clicked() {
+                            if ui
+                                .selectable_value(&mut current_lvl, lvl, lvl.as_str())
+                                .clicked()
+                            {
                                 core.set_log_level(lvl);
                             }
                         }
@@ -701,11 +721,7 @@ impl WindowApp {
                                     .monospace()
                                     .color(egui::Color32::from_rgb(110, 120, 135)),
                             );
-                            ui.label(
-                                egui::RichText::new(&entry.message)
-                                    .monospace()
-                                    .color(color),
-                            );
+                            ui.label(egui::RichText::new(&entry.message).monospace().color(color));
                         });
                     }
                 });
@@ -726,13 +742,18 @@ fn main() -> eframe::Result<()> {
         // can be cleanly unmapped (hidden to tray) and re-mapped (shown from tray).
         // Note: WINIT_UNIX_BACKEND was removed in winit 0.29; we unset WAYLAND_DISPLAY
         // and WAYLAND_SOCKET, set GDK_BACKEND=x11, and call builder.with_x11().
-        let has_x11 = std::env::var("DISPLAY").map(|s| !s.is_empty()).unwrap_or(false)
+        let has_x11 = std::env::var("DISPLAY")
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
             || std::path::Path::new("/tmp/.X11-unix/X0").exists()
             || std::path::Path::new("/tmp/.X11-unix/X1").exists();
 
         if has_x11 {
             unsafe {
-                if std::env::var("DISPLAY").map(|s| s.is_empty()).unwrap_or(true) {
+                if std::env::var("DISPLAY")
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+                {
                     std::env::set_var("DISPLAY", ":0");
                 }
                 std::env::set_var("GDK_BACKEND", "x11");

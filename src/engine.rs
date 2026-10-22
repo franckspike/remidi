@@ -76,7 +76,8 @@ fn parse_int_or_hex(s: &str) -> Result<i64> {
     if let Some(hex_part) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         i64::from_str_radix(hex_part, 16).map_err(|e| anyhow!("Invalid hex number '{}': {}", s, e))
     } else {
-        s.parse::<i64>().map_err(|e| anyhow!("Invalid number '{}': {}", s, e))
+        s.parse::<i64>()
+            .map_err(|e| anyhow!("Invalid number '{}': {}", s, e))
     }
 }
 
@@ -108,10 +109,17 @@ fn resolve_target(
             bail!("'out' byte index must be 1-based (out.1, out.2, ...)");
         }
         let out = output_bytes.ok_or_else(|| {
-            anyhow!("Cannot reference 'out.{}' in replace pattern before output is generated", byte_idx)
+            anyhow!(
+                "Cannot reference 'out.{}' in replace pattern before output is generated",
+                byte_idx
+            )
         })?;
         if byte_idx > out.len() {
-            bail!("Reference to out.{} exceeds output length ({})", byte_idx, out.len());
+            bail!(
+                "Reference to out.{} exceeds output length ({})",
+                byte_idx,
+                out.len()
+            );
         }
         let val = out[byte_idx - 1];
         return Ok((val as i64, Some(format!("{:02X}", val))));
@@ -125,7 +133,11 @@ fn resolve_target(
             bail!("'in' byte index must be 1-based (in.1, in.2, ...)");
         }
         if byte_idx > input_bytes.len() {
-            bail!("Reference to in.{} exceeds input length ({})", byte_idx, input_bytes.len());
+            bail!(
+                "Reference to in.{} exceeds input length ({})",
+                byte_idx,
+                input_bytes.len()
+            );
         }
         let val = input_bytes[byte_idx - 1];
         return Ok((val as i64, Some(format!("{:02X}", val))));
@@ -136,8 +148,9 @@ fn resolve_target(
     if let Ok(idx) = group_str.parse::<usize>() {
         if let Some(m) = captures.get(idx) {
             let s = m.as_str().trim();
-            let val = i64::from_str_radix(s, 16)
-                .with_context(|| format!("Captured value '{}' in group ${} is not valid hex", s, idx))?;
+            let val = i64::from_str_radix(s, 16).with_context(|| {
+                format!("Captured value '{}' in group ${} is not valid hex", s, idx)
+            })?;
             return Ok((val, Some(s.to_string())));
         } else {
             bail!("Capture group ${} did not match", idx);
@@ -147,8 +160,12 @@ fn resolve_target(
     // Named capture group
     if let Some(m) = captures.name(group_str) {
         let s = m.as_str().trim();
-        let val = i64::from_str_radix(s, 16)
-            .with_context(|| format!("Captured value '{}' in group '{}' is not valid hex", s, group_str))?;
+        let val = i64::from_str_radix(s, 16).with_context(|| {
+            format!(
+                "Captured value '{}' in group '{}' is not valid hex",
+                s, group_str
+            )
+        })?;
         return Ok((val, Some(s.to_string())));
     }
 
@@ -180,7 +197,8 @@ fn eval_expression(
 
     // If there is NO arithmetic and NO format specified, and raw_str is available:
     // preserve the raw string as-is (e.g. "${1}", "${ch}", "${prog}")
-    if op_and_operand.is_none() && format_str.is_none()
+    if op_and_operand.is_none()
+        && format_str.is_none()
         && let Some(raw) = raw_str
     {
         return Ok(raw);
@@ -196,7 +214,11 @@ fn eval_expression(
         Some("dec") => Ok(format!("{}", computed_val)),
         Some("ch") | Some("channel") => Ok(format!("{}", (computed_val % 16) + 1)),
         Some("hex") => Ok(format!("{:02X}", computed_val)),
-        Some(other) => bail!("Unknown format modifier ':{}' in expression '${{{}}}'", other, expr),
+        Some(other) => bail!(
+            "Unknown format modifier ':{}' in expression '${{{}}}'",
+            other,
+            expr
+        ),
         None => {
             if default_format_hex || op_and_operand.is_some() {
                 Ok(format!("{:02X}", computed_val))
@@ -279,9 +301,10 @@ pub fn process_midi_bytes(
                 && let Some(last) = rule.last_triggered
                 && now.saturating_duration_since(last) < rule.debounce
             {
-                let comment = rule.comment.as_deref().and_then(|c| {
-                    expand_template(c, &captures, input_bytes, None, false).ok()
-                });
+                let comment = rule
+                    .comment
+                    .as_deref()
+                    .and_then(|c| expand_template(c, &captures, input_bytes, None, false).ok());
                 return Ok(RuleOutcome::FilteredByDebounce {
                     rule_index: idx,
                     comment,
@@ -350,7 +373,8 @@ mod tests {
         );
 
         // Within 500ms -> filtered by debounce
-        let res2 = process_midi_bytes(&mut rules, &[0xC0, 0x05], t0 + Duration::from_millis(200)).unwrap();
+        let res2 =
+            process_midi_bytes(&mut rules, &[0xC0, 0x05], t0 + Duration::from_millis(200)).unwrap();
         assert_eq!(
             res2,
             RuleOutcome::FilteredByDebounce {
@@ -360,7 +384,8 @@ mod tests {
         );
 
         // After 500ms -> matched again
-        let res3 = process_midi_bytes(&mut rules, &[0xC0, 0x05], t0 + Duration::from_millis(501)).unwrap();
+        let res3 =
+            process_midi_bytes(&mut rules, &[0xC0, 0x05], t0 + Duration::from_millis(501)).unwrap();
         assert_eq!(
             res3,
             RuleOutcome::Matched {
@@ -404,7 +429,9 @@ mod tests {
                 replace: "90 ${$1 - 1} 7F".to_string(),
                 debounce_ms: 0,
                 dec_second_byte: false,
-                comment: Some("PC $1 -> Note ${$1 - 1:dec} (hex ${out.2}) [in: ${in.1}]".to_string()),
+                comment: Some(
+                    "PC $1 -> Note ${$1 - 1:dec} (hex ${out.2}) [in: ${in.1}]".to_string(),
+                ),
             })
             .unwrap(),
         ];
@@ -440,7 +467,9 @@ mod tests {
                 replace: "B${ch} 50 ${vel}".to_string(),
                 debounce_ms: 0,
                 dec_second_byte: false,
-                comment: Some("Channel ${ch:ch} Note ${note:dec} -> CC 80 val ${out.3:dec}".to_string()),
+                comment: Some(
+                    "Channel ${ch:ch} Note ${note:dec} -> CC 80 val ${out.3:dec}".to_string(),
+                ),
             })
             .unwrap(),
         ];

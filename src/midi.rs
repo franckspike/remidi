@@ -1,5 +1,7 @@
 use crate::config::{Config, PipelineConfig, TestAction};
-use crate::engine::{CompiledRule, RuleOutcome, format_midi_hex, parse_midi_hex, process_midi_bytes};
+use crate::engine::{
+    CompiledRule, RuleOutcome, format_midi_hex, parse_midi_hex, process_midi_bytes,
+};
 #[allow(unused_imports)]
 use anyhow::{Context, Result, anyhow};
 #[allow(unused_imports)]
@@ -135,10 +137,7 @@ impl SharedLogger {
     }
 
     pub fn snapshot(&self) -> Vec<LogEntry> {
-        self.entries
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.entries.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     pub fn clear(&self) {
@@ -179,9 +178,7 @@ impl OutputConnection {
             #[cfg(target_os = "linux")]
             OutputConnection::Alsa(sender) => sender.send(bytes),
             #[cfg(not(target_os = "linux"))]
-            OutputConnection::Midir(conn) => {
-                conn.send(bytes).map_err(|e| anyhow!("{:#}", e))
-            }
+            OutputConnection::Midir(conn) => conn.send(bytes).map_err(|e| anyhow!("{:#}", e)),
         }
     }
 }
@@ -329,7 +326,12 @@ impl SharedOutputPool {
         }
     }
 
-    pub fn send_synchronized(&self, pipeline_id: &str, target_port_name: &str, bytes: &[u8]) -> bool {
+    pub fn send_synchronized(
+        &self,
+        pipeline_id: &str,
+        target_port_name: &str,
+        bytes: &[u8],
+    ) -> bool {
         let Some(conn_arc) = self.ensure_open(pipeline_id, target_port_name) else {
             return false;
         };
@@ -384,22 +386,16 @@ impl PipelineRuntimeState {
                 ..
             }) => {
                 let out_hex = format_midi_hex(&output_bytes);
-                if self
-                    .output_pool
-                    .send_synchronized(&self.pipeline_id, &self.target_port_name, &output_bytes)
-                {
-                    self.logger.verbose(format!(
-                        "[{}] {} --> {}",
-                        self.pipeline_id,
-                        in_hex,
-                        out_hex,
-                    ));
+                if self.output_pool.send_synchronized(
+                    &self.pipeline_id,
+                    &self.target_port_name,
+                    &output_bytes,
+                ) {
+                    self.logger
+                        .verbose(format!("[{}] {} --> {}", self.pipeline_id, in_hex, out_hex,));
                     let suffix = comment.as_deref().unwrap_or_default();
-                    self.logger.transform(format!(
-                        "[{}] {}",
-                        self.pipeline_id,
-                        suffix
-                    ));
+                    self.logger
+                        .transform(format!("[{}] {}", self.pipeline_id, suffix));
                 }
             }
             Ok(RuleOutcome::FilteredByDebounce { .. }) => {
@@ -562,7 +558,9 @@ impl MidiEngine {
             let subscribers = Arc::new(Mutex::new(vec![state.clone()]));
             let backend = create_virtual_backend(
                 #[cfg(target_os = "linux")]
-                self.alsa_client.as_ref().ok_or_else(|| anyhow!("ALSA client not available"))?,
+                self.alsa_client
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("ALSA client not available"))?,
                 &pipeline_cfg.id,
                 &full_virtual_port_name,
                 subscribers.clone(),

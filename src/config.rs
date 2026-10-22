@@ -1,9 +1,9 @@
+use crate::midi::LogLevel;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Document, value};
-use crate::midi::LogLevel;
 
 pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.default.toml");
 
@@ -81,9 +81,9 @@ impl PipelineConfig {
             }
             if let Some(rest) = trimmed.strip_prefix("sleep") {
                 let ms_str = rest.trim();
-                let ms: u64 = ms_str
-                    .parse()
-                    .with_context(|| format!("Invalid sleep duration '{}' in test step '{}'", ms_str, raw))?;
+                let ms: u64 = ms_str.parse().with_context(|| {
+                    format!("Invalid sleep duration '{}' in test step '{}'", ms_str, raw)
+                })?;
                 actions.push(TestAction::Sleep(ms));
             } else {
                 actions.push(TestAction::Send(trimmed.to_string()));
@@ -105,8 +105,9 @@ pub fn ensure_user_config_exists(path: &Path) -> Result<()> {
                 format!("Failed to create config directory '{}'", parent.display())
             })?;
         }
-        fs::write(path, DEFAULT_CONFIG_TEMPLATE)
-            .with_context(|| format!("Failed to create default config file '{}'", path.display()))?;
+        fs::write(path, DEFAULT_CONFIG_TEMPLATE).with_context(|| {
+            format!("Failed to create default config file '{}'", path.display())
+        })?;
     }
     Ok(())
 }

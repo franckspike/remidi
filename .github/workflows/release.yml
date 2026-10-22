@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo Build Release
+        run: cargo build --release
+
+      - name: Package Linux Archive
+        run: |
+          mkdir -p package-linux
+          cp target/release/remidi package-linux/
+          cp config.default.toml package-linux/
+          cp README.md package-linux/
+          cp -r assets package-linux/
+          tar -czf remidi-linux-x86_64.tar.gz -C package-linux .
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remidi-linux-x86_64
+          path: remidi-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Build Windows & Installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo Build Release
+        run: cargo build --release
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress
+
+      - name: Build Windows Installer (remidi-setup.exe)
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\remidi.iss
+
+      - name: Package Portable Windows Archive
+        run: |
+          New-Item -ItemType Directory -Force -Path package-win
+          Copy-Item target\release\remidi.exe package-win\
+          Copy-Item config.default.toml package-win\
+          Copy-Item README.md package-win\
+          Compress-Archive -Path package-win\* -DestinationPath remidi-windows-x86_64-portable.zip
+
+      - name: Upload Windows Setup Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remidi-setup
+          path: target/installer/remidi-setup.exe
+
+      - name: Upload Windows Portable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remidi-windows-portable
+          path: remidi-windows-x86_64-portable.zip
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remidi-linux-x86_64
+          path: dist
+
+      - name: Download Windows Setup Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remidi-setup
+          path: dist
+
+      - name: Download Windows Portable Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: remidi-windows-portable
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/remidi-setup.exe
+            dist/remidi-windows-x86_64-portable.zip
+            dist/remidi-linux-x86_64.tar.gz
+          generate_release_notes: true
