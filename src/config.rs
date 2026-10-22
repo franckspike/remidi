@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Document, value};
+use crate::midi::LogLevel;
 
 pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.default.toml");
 
@@ -110,25 +111,61 @@ pub fn ensure_user_config_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
     pub start_minimized: bool,
     #[serde(default)]
-    pub verbose: bool,
+    pub log_level: LogLevel,
     #[serde(default)]
     pub pause_all: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            start_minimized: false,
+            log_level: LogLevel::Info,
+            pause_all: false,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RawAppSettings {
     #[serde(default)]
-    pub only_errors: bool,
+    start_minimized: bool,
+    #[serde(default)]
+    log_level: Option<LogLevel>,
+    #[serde(default)]
+    verbose: Option<bool>,
+    #[serde(default)]
+    only_errors: Option<bool>,
+    #[serde(default)]
+    pause_all: bool,
 }
 
 impl AppSettings {
     pub fn load_from_file(path: &Path) -> Self {
-        if let Ok(content) = fs::read_to_string(path) {
-            toml::from_str(&content).unwrap_or_default()
-        } else {
-            Self::default()
+        if let Ok(content) = fs::read_to_string(path)
+            && let Ok(raw) = toml::from_str::<RawAppSettings>(&content)
+        {
+            let log_level = if let Some(lvl) = raw.log_level {
+                lvl
+            } else if raw.only_errors == Some(true) {
+                LogLevel::Error
+            } else if raw.verbose == Some(true) {
+                LogLevel::Verbose
+            } else {
+                LogLevel::Info
+            };
+            return Self {
+                start_minimized: raw.start_minimized,
+                log_level,
+                pause_all: raw.pause_all,
+            };
         }
+        Self::default()
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
@@ -235,9 +272,8 @@ mod tests {
     fn test_app_settings_default_and_roundtrip() {
         let defaults = AppSettings::default();
         assert!(!defaults.start_minimized);
-        assert!(!defaults.verbose);
+        assert_eq!(defaults.log_level, LogLevel::Info);
         assert!(!defaults.pause_all);
-        assert!(!defaults.only_errors);
 
         let toml_str = toml::to_string_pretty(&defaults).unwrap();
         let parsed: AppSettings = toml::from_str(&toml_str).unwrap();
@@ -245,12 +281,28 @@ mod tests {
 
         let custom = AppSettings {
             start_minimized: true,
-            verbose: true,
+            log_level: LogLevel::Verbose,
             pause_all: true,
-            only_errors: true,
         };
         let custom_toml = toml::to_string_pretty(&custom).unwrap();
         let custom_parsed: AppSettings = toml::from_str(&custom_toml).unwrap();
         assert_eq!(custom, custom_parsed);
+
+        // Test backward-compatible legacy settings loading
+        let legacy_verbose_toml = "start_minimized = false\nverbose = true\npause_all = false\n";
+        let temp_dir = std::env::temp_dir();
+        let p_verb = temp_dir.join("remidi_legacy_verb.toml");
+        fs::write(&p_verb, legacy_verbose_toml).unwrap();
+        let loaded = AppSettings::load_from_file(&p_verb);
+        assert_eq!(loaded.log_level, LogLevel::Verbose);
+        let _ = fs::remove_file(p_verb);
+
+        let legacy_err_toml = "start_minimized = true\nonly_errors = true\npause_all = false\n";
+        let p_err = temp_dir.join("remidi_legacy_err.toml");
+        fs::write(&p_err, legacy_err_toml).unwrap();
+        let loaded_err = AppSettings::load_from_file(&p_err);
+        assert_eq!(loaded_err.log_level, LogLevel::Error);
+        assert!(loaded_err.start_minimized);
+        let _ = fs::remove_file(p_err);
     }
 }

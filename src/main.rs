@@ -165,7 +165,6 @@ struct ReMidiCore {
     last_port_check: Instant,
     window_visible: bool,
     start_minimized: bool,
-    only_errors: bool,
     icon_has_error: bool,
 }
 
@@ -179,14 +178,14 @@ impl ReMidiCore {
         let settings_path = config_path.with_file_name("settings.toml");
         let settings = AppSettings::load_from_file(&settings_path);
 
-        logger.verbose.store(settings.verbose, Ordering::Relaxed);
+        logger.set_log_level(settings.log_level);
         logger.paused.store(settings.pause_all, Ordering::Relaxed);
 
         let cached_midi_ports = list_midi_out_ports();
         let (tray_icon, tray_ids) = match build_tray(
             &[],
             &cached_midi_ports,
-            settings.verbose,
+            settings.log_level,
             settings.pause_all,
         ) {
             Ok((t, ids)) => (Some(t), Some(ids)),
@@ -209,7 +208,6 @@ impl ReMidiCore {
             last_port_check: Instant::now(),
             window_visible: initial_window_visible,
             start_minimized: settings.start_minimized,
-            only_errors: settings.only_errors,
             icon_has_error: false,
         };
 
@@ -231,13 +229,27 @@ impl ReMidiCore {
     fn save_settings(&self) {
         let settings = AppSettings {
             start_minimized: self.start_minimized,
-            verbose: self.logger.verbose.load(Ordering::Relaxed),
+            log_level: self.logger.log_level(),
             pause_all: self.logger.paused.load(Ordering::Relaxed),
-            only_errors: self.only_errors,
         };
         if let Err(e) = settings.save_to_file(&self.settings_path) {
             self.logger.error(format!("Failed to save settings: {:#}", e));
         }
+    }
+
+    fn set_log_level(&mut self, new_level: LogLevel) {
+        if self.logger.log_level() == new_level {
+            return;
+        }
+        self.logger.set_log_level(new_level);
+        if let Some(ids) = &self.tray_ids {
+            ids.log_level_items.item_error.set_checked(new_level == LogLevel::Error);
+            ids.log_level_items.item_transform.set_checked(new_level == LogLevel::Transform);
+            ids.log_level_items.item_info.set_checked(new_level == LogLevel::Info);
+            ids.log_level_items.item_verbose.set_checked(new_level == LogLevel::Verbose);
+        }
+        self.logger.info(format!("Log level set to {}", new_level));
+        self.save_settings();
     }
 
     fn rebuild_tray_menu(&mut self) {
@@ -249,11 +261,11 @@ impl ReMidiCore {
             .current_config()
             .map(|c| c.pipelines.as_slice())
             .unwrap_or(&[]);
-        let verbose = self.logger.verbose.load(Ordering::Relaxed);
+        let log_level = self.logger.log_level();
         let paused = self.logger.paused.load(Ordering::Relaxed);
         self.cached_midi_ports = list_midi_out_ports();
         if let Ok((menu, ids)) =
-            build_tray_menu(pipelines, &self.cached_midi_ports, verbose, paused)
+            build_tray_menu(pipelines, &self.cached_midi_ports, log_level, paused)
         {
             tray.set_menu(Some(Box::new(menu)));
             self.tray_ids = Some(ids);
@@ -365,16 +377,14 @@ impl ReMidiCore {
             } else if event.id == ids.reload_config {
                 self.logger.info("reloading config...");
                 self.reload_config();
-            } else if event.id == ids.toggle_verbose.id() {
-                let new_val = !self.logger.verbose.load(Ordering::Relaxed);
-                self.logger.verbose.store(new_val, Ordering::Relaxed);
-                ids.toggle_verbose.set_checked(new_val);
-                self.logger.info(if new_val {
-                    "Verbose is ON"
-                } else {
-                    "Verbose is OFF"
-                });
-                self.save_settings();
+            } else if event.id == ids.log_level_items.item_error.id() {
+                self.set_log_level(LogLevel::Error);
+            } else if event.id == ids.log_level_items.item_transform.id() {
+                self.set_log_level(LogLevel::Transform);
+            } else if event.id == ids.log_level_items.item_info.id() {
+                self.set_log_level(LogLevel::Info);
+            } else if event.id == ids.log_level_items.item_verbose.id() {
+                self.set_log_level(LogLevel::Verbose);
             } else if event.id == ids.toggle_pause.id() {
                 let new_val = !self.logger.paused.load(Ordering::Relaxed);
                 self.logger.paused.store(new_val, Ordering::Relaxed);
@@ -567,20 +577,6 @@ impl WindowApp {
                     core.save_settings();
                 }
 
-                let mut verbose = core.logger.verbose.load(Ordering::Relaxed);
-                if ui.checkbox(&mut verbose, "Verbose").changed() {
-                    core.logger.verbose.store(verbose, Ordering::Relaxed);
-                    if let Some(ids) = &core.tray_ids {
-                        ids.toggle_verbose.set_checked(verbose);
-                    }
-                    core.logger.info(if verbose {
-                        "Verbose is ON"
-                    } else {
-                        "Verbose is OFF"
-                    });
-                    core.save_settings();
-                }
-
                 let mut paused = core.logger.paused.load(Ordering::Relaxed);
                 if ui.checkbox(&mut paused, "Pause all").changed() {
                     core.logger.paused.store(paused, Ordering::Relaxed);
@@ -591,9 +587,17 @@ impl WindowApp {
                     core.save_settings();
                 }
 
-                if ui.checkbox(&mut core.only_errors, "Errors Only").changed() {
-                    core.save_settings();
-                }
+                ui.label("Log level:");
+                let mut current_lvl = core.logger.log_level();
+                egui::ComboBox::from_id_salt("log_level_select")
+                    .selected_text(current_lvl.as_str())
+                    .show_ui(ui, |ui| {
+                        for &lvl in &LogLevel::ALL {
+                            if ui.selectable_value(&mut current_lvl, lvl, lvl.as_str()).clicked() {
+                                core.set_log_level(lvl);
+                            }
+                        }
+                    });
 
                 if ui.button("🗑 Clear").clicked() {
                     core.logger.clear();
@@ -620,20 +624,20 @@ impl WindowApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let entries = core.logger.snapshot();
-            let only_errors = core.only_errors;
+            let filter_level = core.logger.log_level();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     for entry in entries {
-                        if only_errors && entry.level != LogLevel::Error {
+                        if entry.level > filter_level {
                             continue;
                         }
                         let color = match entry.level {
-                            LogLevel::Info => egui::Color32::from_rgb(210, 215, 225),
-                            LogLevel::Transform => egui::Color32::from_rgb(80, 220, 130),
-                            LogLevel::Verbose => egui::Color32::from_rgb(140, 150, 165),
                             LogLevel::Error => egui::Color32::from_rgb(255, 95, 85),
+                            LogLevel::Transform => egui::Color32::from_rgb(80, 220, 130),
+                            LogLevel::Info => egui::Color32::from_rgb(210, 215, 225),
+                            LogLevel::Verbose => egui::Color32::from_rgb(140, 150, 165),
                         };
                         ui.horizontal(|ui| {
                             ui.label(

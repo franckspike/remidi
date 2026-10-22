@@ -4,18 +4,46 @@ use crate::engine::{CompiledRule, RuleOutcome, format_midi_hex, parse_midi_hex, 
 use anyhow::{Context, Result, anyhow};
 #[allow(unused_imports)]
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
 pub enum LogLevel {
-    Info,
-    Transform,
-    Verbose,
-    Error,
+    Error = 0,
+    Transform = 1,
+    #[default]
+    Info = 2,
+    Verbose = 3,
+}
+
+impl LogLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Error => "Error",
+            Self::Transform => "Transform",
+            Self::Info => "Info",
+            Self::Verbose => "Verbose",
+        }
+    }
+
+    pub const ALL: [LogLevel; 4] = [
+        LogLevel::Error,
+        LogLevel::Transform,
+        LogLevel::Info,
+        LogLevel::Verbose,
+    ];
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +57,7 @@ pub struct LogEntry {
 pub struct SharedLogger {
     entries: Arc<Mutex<Vec<LogEntry>>>,
     has_unseen_error: Arc<AtomicBool>,
-    pub verbose: Arc<AtomicBool>,
+    pub log_level: Arc<AtomicU8>,
     pub paused: Arc<AtomicBool>,
 }
 
@@ -38,13 +66,26 @@ impl SharedLogger {
         Self {
             entries: Arc::new(Mutex::new(Vec::new())),
             has_unseen_error: Arc::new(AtomicBool::new(false)),
-            verbose: Arc::new(AtomicBool::new(false)),
+            log_level: Arc::new(AtomicU8::new(LogLevel::Info as u8)),
             paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    pub fn log_level(&self) -> LogLevel {
+        match self.log_level.load(Ordering::Relaxed) {
+            0 => LogLevel::Error,
+            1 => LogLevel::Transform,
+            2 => LogLevel::Info,
+            _ => LogLevel::Verbose,
+        }
+    }
+
+    pub fn set_log_level(&self, level: LogLevel) {
+        self.log_level.store(level as u8, Ordering::Relaxed);
+    }
+
     pub fn log(&self, level: LogLevel, msg: impl Into<String>) {
-        if level == LogLevel::Verbose && !self.verbose.load(Ordering::Relaxed) {
+        if level == LogLevel::Verbose && self.log_level() < LogLevel::Verbose {
             return;
         }
         if level == LogLevel::Error {

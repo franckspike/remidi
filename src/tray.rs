@@ -1,4 +1,5 @@
 use crate::config::PipelineConfig;
+use crate::midi::LogLevel;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -9,11 +10,18 @@ pub struct PipelineMenuEntry {
     pub port_items: Vec<(CheckMenuItem, String)>,
 }
 
+pub struct LogLevelMenuEntries {
+    pub item_error: CheckMenuItem,
+    pub item_transform: CheckMenuItem,
+    pub item_info: CheckMenuItem,
+    pub item_verbose: CheckMenuItem,
+}
+
 pub struct TrayMenuIds {
     pub toggle_window: MenuId,
     pub edit_config: MenuId,
     pub reload_config: MenuId,
-    pub toggle_verbose: CheckMenuItem,
+    pub log_level_items: LogLevelMenuEntries,
     pub toggle_pause: CheckMenuItem,
     pub quit: MenuId,
     pub pipelines: Vec<PipelineMenuEntry>,
@@ -84,7 +92,7 @@ pub fn generate_tray_icon(has_error: bool, is_paused: bool) -> Icon {
 pub fn build_tray_menu(
     pipelines: &[PipelineConfig],
     midi_out_ports: &[String],
-    verbose: bool,
+    log_level: LogLevel,
     paused: bool,
 ) -> anyhow::Result<(Menu, TrayMenuIds)> {
     let menu = Menu::new();
@@ -142,14 +150,27 @@ pub fn build_tray_menu(
 
     let item_edit = MenuItem::new("Edit Config (edit)", true, None);
     let item_reload = MenuItem::new("Reload Config (update)", true, None);
-    let item_verbose = CheckMenuItem::new("Verbose Logging (verbose)", true, verbose, None);
+
+    let sub_log_level = Submenu::new("Log Level", true);
+    let item_lvl_error = CheckMenuItem::new("Error", true, log_level == LogLevel::Error, None);
+    let item_lvl_transform =
+        CheckMenuItem::new("Transform", true, log_level == LogLevel::Transform, None);
+    let item_lvl_info = CheckMenuItem::new("Info", true, log_level == LogLevel::Info, None);
+    let item_lvl_verbose =
+        CheckMenuItem::new("Verbose", true, log_level == LogLevel::Verbose, None);
+
+    sub_log_level.append(&item_lvl_error)?;
+    sub_log_level.append(&item_lvl_transform)?;
+    sub_log_level.append(&item_lvl_info)?;
+    sub_log_level.append(&item_lvl_verbose)?;
+
     let item_pause = CheckMenuItem::new("Pause All Pipelines", true, paused, None);
     let item_quit = MenuItem::new("Quit ReMIDI", true, None);
 
     menu.append(&item_edit)?;
     menu.append(&item_reload)?;
     menu.append(&PredefinedMenuItem::separator())?;
-    menu.append(&item_verbose)?;
+    menu.append(&sub_log_level)?;
     menu.append(&item_pause)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&item_quit)?;
@@ -158,7 +179,12 @@ pub fn build_tray_menu(
         toggle_window: item_window.id().clone(),
         edit_config: item_edit.id().clone(),
         reload_config: item_reload.id().clone(),
-        toggle_verbose: item_verbose,
+        log_level_items: LogLevelMenuEntries {
+            item_error: item_lvl_error,
+            item_transform: item_lvl_transform,
+            item_info: item_lvl_info,
+            item_verbose: item_lvl_verbose,
+        },
         toggle_pause: item_pause,
         quit: item_quit.id().clone(),
         pipelines: pipeline_entries,
@@ -170,10 +196,10 @@ pub fn build_tray_menu(
 pub fn build_tray(
     pipelines: &[PipelineConfig],
     midi_out_ports: &[String],
-    verbose: bool,
+    log_level: LogLevel,
     paused: bool,
 ) -> anyhow::Result<(TrayIcon, TrayMenuIds)> {
-    let (menu, ids) = build_tray_menu(pipelines, midi_out_ports, verbose, paused)?;
+    let (menu, ids) = build_tray_menu(pipelines, midi_out_ports, log_level, paused)?;
     let icon = generate_tray_icon(false, paused);
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

@@ -13,7 +13,7 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
     - **Linux:** `~/.config/remidi/config.toml` and `~/.config/remidi/settings.toml`
     - **Windows:** `%APPDATA%\remidi\config.toml` and `%APPDATA%\remidi\settings.toml`
   - `config.toml` is auto-created from the built-in template ([`config.default.toml`](config.default.toml)) on first run.
-  - `settings.toml` automatically persists your UI settings (`start_minimized`, `verbose`, `pause_all`, `only_errors`).
+  - `settings.toml` automatically persists your UI settings (`start_minimized`, `log_level`, `pause_all`).
 - **Multiple MIDI Pipelines in One Instance:**
   - Define as many `[[pipelines]]` as you need in `config.toml`.
   - Virtual ports are named `"ReMIDI - <virtual_port>"` on Windows, and `"<virtual_port>"` on Linux (under the `"ReMIDI"` ALSA client).
@@ -103,6 +103,6 @@ cargo uninstall remidi
   - **MIDI-Out Port List:** Select the destination `target_port` from all currently detected MIDI-out ports (saved to `config.toml`).
 - **Edit Config (`edit`):** Open `config.toml` in `$VISUAL` / `$EDITOR` (or `notepad` on Windows / `vi` in a terminal on Linux), wait until the editor closes, and automatically reload.
 - **Reload Config (`update`):** Re-parse and reload `config.toml`.
-- **Verbose Logging (`verbose`):** Log unmatched and delay-filtered MIDI messages in addition to matched transformations.
+- **Log Level Submenu (`Error`, `Transform`, `Info`, `Verbose`):** Select the active log filtering level directly from the tray or from the UI combobox.
 - **Pause All Pipelines:** Temporarily mute MIDI processing across all pipelines without closing virtual ports.
 - **Quit ReMIDI:** Close virtual/hardware MIDI ports and exit.
