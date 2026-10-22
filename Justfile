@@ -40,9 +40,37 @@ fmt:
 fmt-check:
     cargo fmt --check
 
-# Installer le binaire localement via cargo
+# Installer le binaire localement via cargo et enregistrer le raccourci XDG (Linux)
 install:
     cargo install --path .
+    @if [ "$(uname)" = "Linux" ]; then \
+        echo "Installation du raccourci XDG et de l'icône..."; \
+        mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/applications"; \
+        mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"; \
+        BIN_PATH="$(which remidi 2>/dev/null || echo "$HOME/.cargo/bin/remidi")"; \
+        sed "s|^Exec=remidi|Exec=$BIN_PATH|" assets/remidi.desktop > "${XDG_DATA_HOME:-$HOME/.local/share}/applications/remidi.desktop"; \
+        chmod +x "${XDG_DATA_HOME:-$HOME/.local/share}/applications/remidi.desktop"; \
+        cp assets/remidi.svg "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/remidi.svg"; \
+        if command -v update-desktop-database >/dev/null 2>&1; then \
+            update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications" >/dev/null 2>&1 || true; \
+        fi; \
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then \
+            gtk-update-icon-cache -f -t "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true; \
+        fi; \
+        echo "ReMIDI installé dans le menu d'applications XDG !"; \
+    fi
+
+# Désinstaller le binaire et le raccourci XDG
+uninstall:
+    cargo uninstall remidi
+    @if [ "$(uname)" = "Linux" ]; then \
+        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/remidi.desktop"; \
+        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/remidi.svg"; \
+        if command -v update-desktop-database >/dev/null 2>&1; then \
+            update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications" >/dev/null 2>&1 || true; \
+        fi; \
+        echo "Raccourci XDG retiré."; \
+    fi
 
 # Afficher l'état des ports et clients ALSA MIDI (Linux)
 alsa-ports:

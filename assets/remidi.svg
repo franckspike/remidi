@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#222834"/>
+      <stop offset="100%" stop-color="#14171f"/>
+    </radialGradient>
+  </defs>
+  <!-- Background circle with outer border -->
+  <circle cx="64" cy="64" r="60" fill="url(#bg)"/>
+  <circle cx="64" cy="64" r="54" fill="none" stroke="#2ecc71" stroke-width="6"/>
+  <!-- 5-Pin DIN MIDI Connector -->
+  <circle cx="38" cy="72" r="7.5" fill="#2ecc71"/>
+  <circle cx="46" cy="46" r="7.5" fill="#2ecc71"/>
+  <circle cx="64" cy="38" r="7.5" fill="#2ecc71"/>
+  <circle cx="82" cy="46" r="7.5" fill="#2ecc71"/>
+  <circle cx="90" cy="72" r="7.5" fill="#2ecc71"/>
+  <!-- Bottom Keyway Notch -->
+  <path d="M 58 98 L 70 98 L 70 110 A 3 3 0 0 1 67 113 L 61 113 A 3 3 0 0 1 58 110 Z" fill="#2ecc71"/>
+</svg>

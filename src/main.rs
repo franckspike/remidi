@@ -154,6 +154,60 @@ fn spawn_editor(path: &Path, logger: &SharedLogger) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn ensure_xdg_desktop_entry_exists(logger: &SharedLogger) {
+    let Some(data_dir) = dirs::data_local_dir() else {
+        return;
+    };
+    let app_dir = data_dir.join("applications");
+    let desktop_path = app_dir.join("remidi.desktop");
+
+    let icons_dir = data_dir.join("icons/hicolor/scalable/apps");
+    let icon_path = icons_dir.join("remidi.svg");
+
+    let mut installed_anything = false;
+
+    if !icon_path.exists() {
+        if let Err(e) = (|| -> anyhow::Result<()> {
+            std::fs::create_dir_all(&icons_dir)?;
+            std::fs::write(&icon_path, include_str!("../assets/remidi.svg"))?;
+            Ok(())
+        })() {
+            logger.error(format!("Could not install application icon: {}", e));
+        } else {
+            installed_anything = true;
+        }
+    }
+
+    if !desktop_path.exists() {
+        if let Err(e) = (|| -> anyhow::Result<()> {
+            std::fs::create_dir_all(&app_dir)?;
+            let exe_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "remidi".to_string());
+            let template = include_str!("../assets/remidi.desktop");
+            let content = template.replace("Exec=remidi", &format!("Exec={}", exe_path));
+            std::fs::write(&desktop_path, content)?;
+            Ok(())
+        })() {
+            logger.error(format!("Could not install desktop shortcut: {}", e));
+        } else {
+            installed_anything = true;
+            logger.info("Installed XDG desktop shortcut in ~/.local/share/applications/remidi.desktop");
+        }
+    }
+
+    if installed_anything {
+        let _ = std::process::Command::new("update-desktop-database")
+            .arg(&app_dir)
+            .output();
+        let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["-f", "-t"])
+            .arg(data_dir.join("icons/hicolor"))
+            .output();
+    }
+}
+
 struct ReMidiCore {
     logger: SharedLogger,
     engine: MidiEngine,
@@ -215,6 +269,8 @@ impl ReMidiCore {
         if let Err(e) = ensure_user_config_exists(&core.config_path) {
             core.logger.error(format!("{:#}", e));
         }
+        #[cfg(target_os = "linux")]
+        ensure_xdg_desktop_entry_exists(&core.logger);
         core.reload_config();
 
         // If no system tray is available on this desktop environment, keep the window visible
@@ -688,7 +744,39 @@ fn main() -> eframe::Result<()> {
     };
 
     let args: Vec<String> = env::args().collect();
-    let config_path = if args.len() > 1 {
+
+    if args.iter().any(|a| a == "--install-desktop") {
+        #[cfg(target_os = "linux")]
+        {
+            let logger = SharedLogger::new();
+            ensure_xdg_desktop_entry_exists(&logger);
+            println!("ReMIDI XDG desktop entry and icon installed.");
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            println!("Desktop shortcut creation is only supported on Linux.");
+        }
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--uninstall-desktop") {
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(data_dir) = dirs::data_local_dir() {
+                let desktop_path = data_dir.join("applications/remidi.desktop");
+                let icon_path = data_dir.join("icons/hicolor/scalable/apps/remidi.svg");
+                let _ = std::fs::remove_file(&desktop_path);
+                let _ = std::fs::remove_file(&icon_path);
+                let _ = std::process::Command::new("update-desktop-database")
+                    .arg(data_dir.join("applications"))
+                    .output();
+                println!("ReMIDI XDG desktop entry and icon removed.");
+            }
+        }
+        return Ok(());
+    }
+
+    let config_path = if args.len() > 1 && !args[1].starts_with('-') {
         PathBuf::from(&args[1])
     } else {
         default_user_config_path().unwrap_or_else(|_| PathBuf::from("config.toml"))

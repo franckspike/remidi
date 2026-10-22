@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ReMIDI
+GenericName=MIDI Filter & Transformer
+Comment=Real-time MIDI event filtering, transformation, and virtual loopback
+Exec=remidi
+Icon=remidi
+Terminal=false
+Categories=AudioVideo;Audio;Midi;
+Keywords=midi;filter;transform;virtual;alsa;
+StartupNotify=true

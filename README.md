@@ -86,10 +86,15 @@ cargo build --release
 cargo test
 
 # 3. Install into your user PATH (~/.cargo/bin/remidi or %USERPROFILE%\.cargo\bin\remidi.exe)
+# On Linux, also installs the XDG application menu shortcut and icon automatically!
 cargo install --path .
+# Or via just:
+just install
 
 # 4. Uninstall
 cargo uninstall remidi
+# Or via just (also removes Linux desktop shortcut & icon):
+just uninstall
 ```
 
 ---
