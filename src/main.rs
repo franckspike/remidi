@@ -333,8 +333,12 @@ impl ReMidiCore {
 
     fn poll_events(&mut self) {
         #[cfg(target_os = "linux")]
-        while gtk::events_pending() {
-            gtk::main_iteration_do(false);
+        {
+            let mut iter_count = 0;
+            while gtk::events_pending() && iter_count < 64 {
+                gtk::main_iteration_do(false);
+                iter_count += 1;
+            }
         }
 
         // Periodically check if connected MIDI-out ports changed so tray menu stays up to date

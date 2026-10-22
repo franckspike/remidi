@@ -395,38 +395,45 @@ fn run_alsa_event_loop(
             break;
         }
 
-        let Ok(seq) = seq_arc.lock() else { break };
-        let mut input = seq.input();
+        let mut pending_dispatches = Vec::new();
+        {
+            let Ok(seq) = seq_arc.lock() else { break };
+            let mut input = seq.input();
 
-        while let Ok(mut ev) = input.event_input() {
-            let dest_port = ev.get_dest().port;
-            let mut message = Vec::new();
+            while let Ok(mut ev) = input.event_input() {
+                let dest_port = ev.get_dest().port;
+                let mut message = Vec::new();
 
-            match ev.get_type() {
-                EventType::PortSubscribed | EventType::PortUnsubscribed => {}
-                EventType::Sysex => {
-                    if let Some(ext) = ev.get_ext() {
-                        sysex_buf.extend_from_slice(ext);
-                        if sysex_buf.last() == Some(&0xF7) {
-                            message = std::mem::take(&mut sysex_buf);
+                match ev.get_type() {
+                    EventType::PortSubscribed | EventType::PortUnsubscribed => {}
+                    EventType::Sysex => {
+                        if let Some(ext) = ev.get_ext() {
+                            sysex_buf.extend_from_slice(ext);
+                            if sysex_buf.last() == Some(&0xF7) {
+                                message = std::mem::take(&mut sysex_buf);
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Ok(nbytes) = decoder.decode(&mut buffer, &mut ev)
+                            && nbytes > 0
+                        {
+                            message.extend_from_slice(&buffer[..nbytes]);
                         }
                     }
                 }
-                _ => {
-                    if let Ok(nbytes) = decoder.decode(&mut buffer, &mut ev)
-                        && nbytes > 0
-                    {
-                        message.extend_from_slice(&buffer[..nbytes]);
+
+                if !message.is_empty() {
+                    let maybe_subs = ports_arc.lock().ok().and_then(|m| m.get(&dest_port).cloned());
+                    if let Some(subs) = maybe_subs {
+                        pending_dispatches.push((subs, message));
                     }
                 }
             }
+        } // Drop the seq lock before dispatching to subscribers to prevent deadlock with AlsaOutputSender
 
-            if !message.is_empty() {
-                let maybe_subs = ports_arc.lock().ok().and_then(|m| m.get(&dest_port).cloned());
-                if let Some(subs) = maybe_subs {
-                    dispatch_to_subscribers(&subs, &message);
-                }
-            }
+        for (subs, message) in pending_dispatches {
+            dispatch_to_subscribers(&subs, &message);
         }
     }
 }

@@ -353,10 +353,7 @@ impl PipelineRuntimeState {
                         in_hex,
                         out_hex,
                     ));
-                    let suffix = comment
-                        .as_deref()
-                        .map(|c| format!("{}", c))
-                        .unwrap_or_default();
+                    let suffix = comment.as_deref().unwrap_or_default();
                     self.logger.transform(format!(
                         "[{}] {}",
                         self.pipeline_id,
