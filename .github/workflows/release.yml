@@ -4,7 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]+.*'
+  release:
+    types: [published]
   workflow_dispatch:
+
 
 permissions:
   contents: write
@@ -59,7 +63,19 @@ jobs:
 
       - name: Build Windows Installer (remidi-setup.exe)
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\remidi.iss
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            if (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+              $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            } elseif (Test-Path "C:\Program Files\Inno Setup 6\ISCC.exe") {
+              $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+            } elseif (Test-Path "C:\ProgramData\chocolatey\bin\iscc.exe") {
+              $iscc = "C:\ProgramData\chocolatey\bin\iscc.exe"
+            }
+          }
+          Write-Host "Using ISCC at: $iscc"
+          & $iscc installer\remidi.iss
+
 
       - name: Package Portable Windows Archive
         run: |
@@ -84,8 +100,9 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: [build-linux, build-windows]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 

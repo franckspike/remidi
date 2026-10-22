@@ -23,7 +23,8 @@ Each pipeline creates a **virtual MIDI port** (visible to DAWs and other applica
   - Changes to `enabled` or `target_port` made from the tray menu are automatically saved back to `config.toml` while preserving all comments and formatting.
 - **Cross-Platform Virtual MIDI Loopback:**
   - **Linux:** Creates native ALSA/JACK virtual MIDI ports out of the box (no external drivers required).
-  - **Windows:** Dynamically uses `teVirtualMIDI64.dll` (`teVirtualMIDISDK`, same driver used by `loopMIDI` and `rtpMIDI`) to create on-the-fly virtual MIDI ports.
+  - **Windows:** Dynamically uses `teVirtualMIDI64.dll` ([teVirtualMIDI driver](https://www.tobias-erichsen.de/software/virtualmidi.html), présentement distribué au sein du package d'installation de [rtpMIDI](https://www.tobias-erichsen.de/software/rtpmidi.html) ou loopMIDI) to create on-the-fly virtual MIDI ports.
+
 - **Regex Hex Matching & Expressions:**
   - Incoming MIDI bytes are formatted as uppercase hex (`"C0 01"`, `"90 3C 7F"`).
   - Match patterns use standard regular expressions with capture groups (`$1`, `$2`, named groups `(?<ch>[0-9A-Fa-f])`).
@@ -74,7 +75,8 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 ### Prerequisites
 - **Rust toolchain:** [rustup.rs](https://rustup.rs/)
 - **Linux system packages:** ALSA & GTK3/AppIndicator development headers (`sudo apt install libasound2-dev libgtk-3-dev libayatana-appindicator3-dev` on Debian/Ubuntu)
-- **Windows driver:** [teVirtualMIDI](https://www.tobias-erichsen.de/software/virtualmidi.html) (installed automatically with `loopMIDI` or `rtpMIDI`) so `teVirtualMIDI64.dll` is present in `C:\Windows\System32`.
+- **Windows driver:** [teVirtualMIDI](https://www.tobias-erichsen.de/software/virtualmidi.html) (le pilote teVirtualMIDI se trouve à cette adresse, mais il fait présentement partie intégrante de l'installateur [rtpMIDI-driver](https://www.tobias-erichsen.de/software/rtpmidi.html) ou de loopMIDI) pour que `teVirtualMIDI64.dll` soit installé dans `C:\Windows\System32`.
+
 
 ### Windows Installer (`remidi-setup.exe`)
 
