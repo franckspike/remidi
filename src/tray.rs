@@ -23,6 +23,7 @@ pub struct TrayMenuIds {
     pub reload_config: MenuId,
     pub log_level_items: LogLevelMenuEntries,
     pub toggle_pause: CheckMenuItem,
+    pub about: MenuId,
     pub quit: MenuId,
     pub pipelines: Vec<PipelineMenuEntry>,
 }
@@ -164,6 +165,11 @@ pub fn build_tray_menu(
     sub_log_level.append(&item_lvl_verbose)?;
 
     let item_pause = CheckMenuItem::new("Pause All Pipelines", true, paused, None);
+    let item_about = MenuItem::new(
+        concat!("About ReMIDI (v", env!("CARGO_PKG_VERSION"), ")..."),
+        true,
+        None,
+    );
     let item_quit = MenuItem::new("Quit ReMIDI", true, None);
 
     menu.append(&item_edit)?;
@@ -172,6 +178,7 @@ pub fn build_tray_menu(
     menu.append(&sub_log_level)?;
     menu.append(&item_pause)?;
     menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&item_about)?;
     menu.append(&item_quit)?;
 
     let ids = TrayMenuIds {
@@ -185,6 +192,7 @@ pub fn build_tray_menu(
             item_verbose: item_lvl_verbose,
         },
         toggle_pause: item_pause,
+        about: item_about.id().clone(),
         quit: item_quit.id().clone(),
         pipelines: pipeline_entries,
     };

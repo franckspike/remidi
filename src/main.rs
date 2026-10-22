@@ -225,6 +225,7 @@ struct ReMidiCore {
     window_visible: bool,
     start_minimized: bool,
     icon_has_error: bool,
+    show_about: bool,
 }
 
 impl ReMidiCore {
@@ -271,9 +272,11 @@ impl ReMidiCore {
             window_visible: initial_window_visible,
             start_minimized: settings.start_minimized,
             icon_has_error: false,
+            show_about: false,
         };
 
-        core.logger.info("----- ReMIDI -----");
+        core.logger
+            .info(format!("----- ReMIDI v{} -----", env!("CARGO_PKG_VERSION")));
         if let Err(e) = ensure_user_config_exists(&core.config_path) {
             core.logger.error(format!("{:#}", e));
         }
@@ -470,6 +473,9 @@ impl ReMidiCore {
                 });
                 self.update_tray_icon();
                 self.save_settings();
+            } else if event.id == ids.about {
+                self.window_visible = true;
+                self.show_about = true;
             } else if event.id == ids.quit {
                 self.engine.stop_all();
                 std::process::exit(0);
@@ -681,6 +687,10 @@ impl WindowApp {
                     core.update_tray_icon();
                 }
 
+                if ui.button("ℹ About").clicked() {
+                    core.show_about = true;
+                }
+
                 ui.separator();
 
                 if ui.button("Quit").clicked() {
@@ -726,6 +736,75 @@ impl WindowApp {
                     }
                 });
         });
+
+        let mut show_about = core.show_about;
+        if show_about {
+            let mut close_clicked = false;
+            let config_path_str = core.config_path.display().to_string();
+            egui::Window::new("About ReMIDI")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .open(&mut show_about)
+                .show(ctx, |ui| {
+                    ui.set_min_width(320.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(6.0);
+                        ui.heading(format!("ReMIDI v{}", env!("CARGO_PKG_VERSION")));
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new("MIDI filtering & transformation utility")
+                                .italics()
+                                .weak(),
+                        );
+                        ui.add_space(8.0);
+                    });
+
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    egui::Grid::new("about_grid")
+                        .num_columns(2)
+                        .spacing([12.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Version:").strong());
+                            ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("Backend:").strong());
+                            #[cfg(target_os = "linux")]
+                            ui.label("ALSA Sequencer (Native Linux)");
+                            #[cfg(target_os = "windows")]
+                            ui.label("teVirtualMIDI / WinMM (Windows)");
+                            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                            ui.label("Midir generic backend");
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("Config:").strong());
+                            ui.label(config_path_str);
+                            ui.end_row();
+
+                            ui.label(egui::RichText::new("Website:").strong());
+                            ui.hyperlink("https://github.com/aliensys/remidi");
+                            ui.end_row();
+                        });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    ui.vertical_centered(|ui| {
+                        if ui.button("Close").clicked() {
+                            close_clicked = true;
+                        }
+                    });
+                    ui.add_space(4.0);
+                });
+            if close_clicked {
+                show_about = false;
+            }
+            core.show_about = show_about;
+        }
     }
 }
 

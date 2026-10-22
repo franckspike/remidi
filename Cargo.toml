@@ -1,7 +1,8 @@
 [package]
 name = "remidi"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
+
 description = "Cross-platform MIDI filtering and transformation system tray utility"
 
 [dependencies]

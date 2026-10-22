@@ -2,8 +2,9 @@
 ; Generates remidi-setup.exe for Windows 64-bit
 
 #define MyAppName "ReMIDI"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "0.1.0"
 #define MyAppPublisher "AlienSys"
+
 #define MyAppURL "https://github.com/aliensys/remidi"
 #define MyAppExeName "remidi.exe"
 
