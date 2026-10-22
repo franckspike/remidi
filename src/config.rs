@@ -110,7 +110,7 @@ pub fn ensure_user_config_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
     pub start_minimized: bool,
@@ -120,24 +120,6 @@ pub struct AppSettings {
     pub pause_all: bool,
     #[serde(default)]
     pub only_errors: bool,
-    #[serde(default = "default_auto_scroll")]
-    pub auto_scroll: bool,
-}
-
-fn default_auto_scroll() -> bool {
-    true
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            start_minimized: false,
-            verbose: false,
-            pause_all: false,
-            only_errors: false,
-            auto_scroll: true,
-        }
-    }
 }
 
 impl AppSettings {
@@ -256,7 +238,6 @@ mod tests {
         assert!(!defaults.verbose);
         assert!(!defaults.pause_all);
         assert!(!defaults.only_errors);
-        assert!(defaults.auto_scroll);
 
         let toml_str = toml::to_string_pretty(&defaults).unwrap();
         let parsed: AppSettings = toml::from_str(&toml_str).unwrap();
@@ -267,7 +248,6 @@ mod tests {
             verbose: true,
             pause_all: true,
             only_errors: true,
-            auto_scroll: false,
         };
         let custom_toml = toml::to_string_pretty(&custom).unwrap();
         let custom_parsed: AppSettings = toml::from_str(&custom_toml).unwrap();

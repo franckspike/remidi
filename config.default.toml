@@ -55,7 +55,7 @@ test = ["C0 01", "sleep 1000", "C0 04"]
 
   [[pipelines.rules]]
   match = 'C0 (\w\w)'
-  replace = "90 ${$1 - 1} 7F"
+  replace = "90 $1 7F"
   debounce_ms = 500
   comment = "Scene Change ${$1:dec}"
 

@@ -165,7 +165,6 @@ struct ReMidiCore {
     last_port_check: Instant,
     window_visible: bool,
     start_minimized: bool,
-    auto_scroll: bool,
     only_errors: bool,
     icon_has_error: bool,
 }
@@ -210,7 +209,6 @@ impl ReMidiCore {
             last_port_check: Instant::now(),
             window_visible: initial_window_visible,
             start_minimized: settings.start_minimized,
-            auto_scroll: settings.auto_scroll,
             only_errors: settings.only_errors,
             icon_has_error: false,
         };
@@ -236,7 +234,6 @@ impl ReMidiCore {
             verbose: self.logger.verbose.load(Ordering::Relaxed),
             pause_all: self.logger.paused.load(Ordering::Relaxed),
             only_errors: self.only_errors,
-            auto_scroll: self.auto_scroll,
         };
         if let Err(e) = settings.save_to_file(&self.settings_path) {
             self.logger.error(format!("Failed to save settings: {:#}", e));
@@ -598,10 +595,6 @@ impl WindowApp {
                     core.save_settings();
                 }
 
-                if ui.checkbox(&mut core.auto_scroll, "Auto-scroll").changed() {
-                    core.save_settings();
-                }
-
                 if ui.button("🗑 Clear").clicked() {
                     core.logger.clear();
                     core.icon_has_error = false;
@@ -628,10 +621,9 @@ impl WindowApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let entries = core.logger.snapshot();
             let only_errors = core.only_errors;
-            let auto_scroll = core.auto_scroll;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .stick_to_bottom(auto_scroll)
+                .stick_to_bottom(true)
                 .show(ui, |ui| {
                     for entry in entries {
                         if only_errors && entry.level != LogLevel::Error {
